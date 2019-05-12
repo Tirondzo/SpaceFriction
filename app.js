@@ -1,12 +1,13 @@
 import GL from '@luma.gl/constants';
-import {AnimationLoop, Model, Geometry, CubeGeometry, setParameters, log} from '@luma.gl/core';
+import {AnimationLoop, Model, Geometry, CubeGeometry, setParameters, log, TextureCube} from '@luma.gl/core';
 import {Matrix4, Vector3, Vector4} from 'math.gl';
 import {parse} from '@loaders.gl/core';
 // eslint-disable-next-line import/no-unresolved
 import {DracoLoader} from '@loaders.gl/draco';
 import {addEvents, GLTFScenegraphLoader, createGLTFObjects, GLTFEnvironment} from '@luma.gl/addons';
 import { Program } from '@luma.gl/webgl';
-import { VERTEX_SHADER, FRAGMENT_SHADER, V_SHADER, F_SHADER, VS_PBR_SHADER, PS_PBR_SHADER } from './shaders.js';
+import { VERTEX_SHADER, FRAGMENT_SHADER, V_SHADER, F_SHADER, VS_PBR_SHADER, PS_PBR_SHADER } from './shaders';
+import { getSpaceSkyboxTextures, SkyboxCube } from './spaceSkybox';
 
 const INFO_HTML = `
 <p>
@@ -173,6 +174,13 @@ export default class AppAnimationLoop extends AnimationLoop {
       depthFunc: GL.LEQUAL
     });
 
+    const SKYBOX_RES = 512;
+    const cubemap = new TextureCube(gl, {
+        data: getSpaceSkyboxTextures([0,0,0], SKYBOX_RES),
+        width: SKYBOX_RES, height: SKYBOX_RES,
+        format: gl.RGB,
+        type: gl.UNSIGNED_BYTE
+      });
     this.main_program = new Program(gl, {id:"main_pr", vs: VS_PBR_SHADER, fs: PS_PBR_SHADER, varyings: ['gl_Position']});
 
     loadGLTF("/resources/space_ranger_sr1/scene.gltf", this.gl, this.loadOptions).then(result =>
@@ -189,10 +197,15 @@ export default class AppAnimationLoop extends AnimationLoop {
         vs: VERTEX_SHADER,
         fs: FRAGMENT_SHADER,
         geometry: new ColoredCubeGeometry()
+      }),
+      skybox: new SkyboxCube(gl, {
+        uniforms: {
+          uTextureCube: cubemap
+        }
       })
     };
   }
-  onRender({gl, tick, aspect, pyramid, cube}) {
+  onRender({gl, tick, aspect, pyramid, cube, skybox}) {
     gl.clear(GL.COLOR_BUFFER_BIT | GL.DEPTH_BUFFER_BIT);
 
     updateCamera(this.camera);
@@ -255,6 +268,12 @@ export default class AppAnimationLoop extends AnimationLoop {
         indexType: model.model.indexType,
       });
     });
+
+
+    skybox.setUniforms({
+      uProjection: projection,
+      uView: view
+    }).draw();
 
     return success;
   }
