@@ -8,6 +8,9 @@ const CONFIG = {
   entry: {
     app: resolve('./app.js')
   },
+  node: {
+    fs: "empty"
+  },
 
   plugins: [new HtmlWebpackPlugin({title: 'Instancing'})]
 };

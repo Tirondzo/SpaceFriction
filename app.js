@@ -1,7 +1,12 @@
 import GL from '@luma.gl/constants';
-import {AnimationLoop, Model, Geometry, CubeGeometry, setParameters} from '@luma.gl/core';
+import {AnimationLoop, Model, Geometry, CubeGeometry, setParameters, log} from '@luma.gl/core';
 import {Matrix4, Vector3, Vector4} from 'math.gl';
-import {addEvents} from '@luma.gl/addons';
+import {parse} from '@loaders.gl/core';
+// eslint-disable-next-line import/no-unresolved
+import {DracoLoader} from '@loaders.gl/draco';
+import {addEvents, GLTFScenegraphLoader, createGLTFObjects, GLTFEnvironment} from '@luma.gl/addons';
+import { Program } from '@luma.gl/webgl';
+import { VERTEX_SHADER, FRAGMENT_SHADER, V_SHADER, F_SHADER, VS_PBR_SHADER, PS_PBR_SHADER } from './shaders.js';
 
 const INFO_HTML = `
 <p>
@@ -10,31 +15,6 @@ const INFO_HTML = `
   </a>
 <p>
 The classic WebGL Lessons in luma.gl
-`;
-
-const VERTEX_SHADER = `\
-attribute vec3 positions;
-attribute vec4 colors;
-
-uniform mat4 uMVMatrix;
-uniform mat4 uPMatrix;
-
-varying vec4 vColor;
-
-void main(void) {
-  gl_Position = uPMatrix * uMVMatrix * vec4(positions, 1.0);
-  vColor = colors;
-}
-`;
-
-const FRAGMENT_SHADER = `\
-precision highp float;
-
-varying vec4 vColor;
-
-void main(void) {
-  gl_FragColor = vColor;
-}
 `;
 
 // Makes a colored pyramid
@@ -151,22 +131,53 @@ class Camera{
   }
 }
 
+async function loadGLTF(url, gl, options) {
+  const data = window.fetch(url);
+  const {gltf, scenes, animator} = await parse(data, GLTFScenegraphLoader, {
+    ...options,
+    gl,
+    DracoLoader
+  }, url);
+  
+  scenes[0].traverse((node, {worldMatrix}) => log.info(4, 'Using model: ', node)());
+  return {scenes, animator, gltf};
+}
 
 export default class AppAnimationLoop extends AnimationLoop {
   // .context(() => createGLContext({canvas: 'lesson04-canvas'}))
   static getInfo() {
     return INFO_HTML;
   }
+  constructor(opts = {}) {
+    super({
+      ...opts,
+      glOptions: {
+        // alpha causes issues with some glTF demos
+        alpha: false
+      }
+    });
+  }
   onInitialize({canvas, gl}) {
     this.camera = new Camera(new Vector3(), new Vector3());
+    this.loadOptions = {
+      pbrDebug: true,
+      imageBasedLightingEnvironment: null,
+      lights: true
+    };
     addKeyboardHandler(canvas);
     addPointerHandler(canvas, this.camera);
     setParameters(gl, {
-      clearColor: [0, 0, 0, 1],
+      clearColor: [0.2, 0.2, 0.2, 1],
       clearDepth: 1,
       depthTest: true,
       depthFunc: GL.LEQUAL
     });
+
+    this.main_program = new Program(gl, {id:"main_pr", vs: VS_PBR_SHADER, fs: PS_PBR_SHADER, varyings: ['gl_Position']});
+
+    loadGLTF("/resources/space_ranger_sr1/scene.gltf", this.gl, this.loadOptions).then(result =>
+      Object.assign(this, result)
+    );
 
     return {
       pyramid: new Model(gl, {
@@ -209,6 +220,43 @@ export default class AppAnimationLoop extends AnimationLoop {
       .rotateXYZ([phi, phi, phi])
     })
     .draw();
+
+    let success = true;
+    if (this.scenes !== undefined)
+    this.scenes[0].traverse((model, {worldMatrix}) => {
+      // In glTF, meshes and primitives do no have their own matrix.
+      model.updateModuleSettings({lightSources: {
+        pointLights: [
+          {
+            color: [255, 0, 0],
+            position: this.camera.pos.clone().negate(),
+            attenuation: [0, 0, 0.01],
+            intensity: 1.0
+          }
+        ],
+        ambientLight: {
+          color: [255, 255, 255],
+          intensity: 1.0
+        }
+      }});
+      const u_MVPMatrix = new Matrix4(projection).multiplyRight(view).multiplyRight(worldMatrix);
+      model.setUniforms({
+        u_Camera: this.camera.pos,
+        u_MVPMatrix,
+        u_PMatrix: projection,
+        u_MVMatrix: worldMatrix.clone().multiplyRight(view),
+        u_ModelMatrix: worldMatrix,
+        u_NormalMatrix: new Matrix4(worldMatrix).invert().transpose(),
+      }).draw({
+        drawMode: model.model.getDrawMode(),
+        vertexCount: model.model.getVertexCount(),
+        vertexArray: model.model.vertexArray,
+        isIndexed: true,
+        indexType: model.model.indexType,
+      });
+    });
+
+    return success;
   }
 }
 const currentlyPressedKeys = {};
