@@ -1,15 +1,17 @@
 import { perlin, lerp, shuffle, range } from './perlin';
 import { Vector3 } from 'math.gl';
-import { TextureCube, Framebuffer } from '@luma.gl/core';
+import { TextureCube, Framebuffer, Renderbuffer, Texture2D, Buffer } from '@luma.gl/core';
 import { Model, CubeGeometry, Geometry } from '@luma.gl/core';
 import GL from '@luma.gl/constants';
 
-const FULLSC_GEOMETRY = new Geometry({
-  drawMode: GL.TRIANGLE_STRIP,
-  attributes: {
-    positions: new Float32Array([1, 1, -1, 1, 1, -1, -1, -1])
-  }
-});
+const FULLSC_GEOMETRY = new Float32Array([-1,-1,0,1,-1,0,1,1,0,-1,1,0]);
+
+const BOX_PLANES = [new Float32Array([1,-1,1,1,-1,-1,1,1,-1,1,1,1]),
+                    new Float32Array([-1,-1,-1,-1,-1,1,-1,1,1,-1,1,-1]),
+                    new Float32Array([-1,-1,-1,1,-1,-1,1,-1,1,-1,-1,1]),
+                    new Float32Array([-1,1,1,1,1,1,1,1,-1,-1,1,-1]),
+                    new Float32Array([-1,-1,1,1,-1,1,1,1,1,-1,1,1]),
+                    new Float32Array([1,-1,-1,-1,-1,-1,-1,1,-1,1,1,-1])];
 
 export function getSpaceSkyboxTextures(pos, size=512) {
   const textures = {pos: {}, neg: {}};
@@ -86,11 +88,11 @@ void main(void) {
 
 const SPACE_SKYBOX_GEN_VS = 
 `#version 300 es
-in vec2 positions;
-in vec3 vertexes
+in vec3 positions;
+in vec3 vertexes;
 out vec3 vPosition;
 void main(void) {
-  gl_Position = vec3(positions, 0.0);
+  gl_Position = vec4(positions, 1.0);
   vPosition = vertexes;
 }
 `;
@@ -99,49 +101,68 @@ const SPACE_SKYBOX_GEN_FS =
 `#version 300 es
 precision highp float;
 in vec3 vPosition;
+out vec4 fragColor;
 void main(void) {
-  gl_FragColor = vec4(normalize(vPosition), 1.0);
+  fragColor = vec4(normalize(vPosition),1.0);
+  //fragColor = vec4(1.0);
 }
 `;
 
 export class SpaceSkybox extends SkyboxCube {
   constructor(gl, props, resolution=512){
     super(gl, props);
+    this.resolution = resolution;
 
+    let rttCubemapData = {pos: {}, neg: {}}; 
+    console.log(GL);
+    for(let i = 0; i < 6; ++i){
+      rttCubemapData[TextureCube.FACES[i]] = new Uint8Array(resolution*resolution*4);
+      //for(let j = 0; j < rttCubemapData[TextureCube.FACES[i]].length; ++j) rttCubemapData[TextureCube.FACES[i]][j] = 128;
+    }
     this.rttCubemap = new TextureCube(gl, {
-      data: null,
+      data: rttCubemapData,
       width: resolution, height: resolution,
       format: gl.RGB,
       type: gl.UNSIGNED_BYTE,
-      border: 0,
-      mipmaps: false
+    });
+
+    this.renderbuffer = new Renderbuffer(gl, {
+      format: GL.DEPTH_COMPONENT16,
+      width: resolution,
+      height: resolution
     });
     this.rttFrameBuffer = new Framebuffer(gl, {
       width: resolution,
       height: resolution,
-      attachments: {
-        [GL.COLOR_ATTACHMENT_0]: [this.rttCubemap, GL.TEXTURE_CUBE_MAP_POSITIVE_X]
-      }
+      color: true, depth: true
+    });
+    this.rttFrameBuffer.attach({
+      [GL.COLOR_ATTACHMENT0]: [this.rttCubemap, GL.TEXTURE_CUBE_MAP_POSITIVE_X],
+      [GL.DEPTH_ATTACHMENT]: this.renderbuffer
     });
 
-    this.fullscModel = new Model(gl, {geometry: FULLSC_GEOMETRY, vs: SPACE_SKYBOX_GEN_VS, fs: SPACE_SKYBOX_GEN_FS});
     this.faceBuffers = new Array(6);
-    for(let i=0; i < 6; ++i)
-      faceBuffers[i] = new Buffer(gl, {data: this.positions.slice(0+i*3*4,(i+1)*3*4)});
+    for(let i=0; i < 6; ++i){
+      //this.faceBuffers[i] = new Buffer(gl, {data: this.geometryBuffers.positions[0].slice(0+i*3*4,(i+1)*3*4)});
+      //const arr = this.geometryBuffers.positions[0].getData({srcByteOffset: 0+i*3*4, length: 3*4});
+      this.faceBuffers[i] = new Buffer(gl, BOX_PLANES[i]);
+    }
+    this.fullscModel = new Model(gl, {attributes: {positions: new Buffer(gl, FULLSC_GEOMETRY), vertexes: this.faceBuffers[0]}, vertexCount: 4, drawMode: gl.TRIANGLE_FAN, vs: SPACE_SKYBOX_GEN_VS, fs: SPACE_SKYBOX_GEN_FS});
   }
 
-  renderCubemap(pos) {
-    this.rttFrameBuffer.bind();
+  renderCubemap(gl, pos) {
+    gl.viewport(0, 0, this.resolution, this.resolution);
     for(let i=0; i < 6; ++i){
       this.rttFrameBuffer.attach({
-        [GL.COLOR_ATTACHMENT_0]: [this.rttCubemap, GL.TEXTURE_CUBE_MAP_POSITIVE_X+i]
+        [GL.COLOR_ATTACHMENT0]: [this.rttCubemap, GL.TEXTURE_CUBE_MAP_POSITIVE_X+i],
+        [GL.DEPTH_ATTACHMENT]: this.renderbuffer
       });
-      this.fullscModel.setAttributes({
-        vertexes: this.faceBuffers[i]
-      });
+      this.rttFrameBuffer.bind();
+      this.fullscModel.setAttributes({vertexes: this.faceBuffers[i]});
       this.fullscModel.draw();
+      this.rttFrameBuffer.unbind();
     }
-    this.rttFrameBuffer.unbind();
+    this.setUniforms({uTextureCube: this.rttCubemap});
   }
 }
 
