@@ -3,6 +3,8 @@ import { Vector3 } from 'math.gl';
 import { TextureCube, Framebuffer, Renderbuffer, Texture2D, Buffer } from '@luma.gl/core';
 import { Model, CubeGeometry, Geometry } from '@luma.gl/core';
 import GL from '@luma.gl/constants';
+import {SIMPLEX_NOISE_3D_SHADER} from './simplex';
+import {CLASSIC_NOISE_3D_SHADER} from './perlin';
 
 const FULLSC_GEOMETRY = new Float32Array([-1,-1,0,1,-1,0,1,1,0,-1,1,0]);
 
@@ -98,15 +100,57 @@ void main(void) {
 `;
 
 const SPACE_SKYBOX_GEN_FS = 
-`#version 300 es
+(`#version 300 es` + CLASSIC_NOISE_3D_SHADER + `
+
 precision highp float;
 in vec3 vPosition;
 out vec4 fragColor;
-void main(void) {
-  fragColor = vec4(normalize(vPosition),1.0);
-  //fragColor = vec4(1.0);
+uniform vec3 offset;
+
+float normalnoise(vec3 p){
+  return cnoise(p)*.5 + .5;
 }
-`;
+
+float noise(vec3 p){
+  #define steps 5
+  float scale = pow(2.0, float(steps));
+  float displace = 0.0;
+  vec3 dir = normalize(p);
+  
+  displace = normalnoise(p * scale + displace*dir);
+  scale *= 0.5;
+  displace = normalnoise(p * scale + displace*dir);
+  scale *= 0.5;
+  displace = normalnoise(p * scale + displace*dir);
+  scale *= 0.5;
+  displace = normalnoise(p * scale + displace*dir);
+  scale *= 0.5;
+  displace = normalnoise(p * scale + displace*dir);
+  scale *= 0.5;
+
+  return normalnoise(p + displace);
+}
+
+vec3 coloredNoise(vec3 p){
+  return vec3(normalnoise(p),normalnoise(p+10.),normalnoise(p-5.));
+}
+
+void main(void) {
+  vec3 np = normalize(vPosition);
+  vec3 p = np+offset*0.01;
+  float n = noise(p);
+  n = pow(n+0.15, 6.0);
+
+  vec3 col = coloredNoise(p)*.3;
+  vec3 base = vec3(.2,0.5,0.8);
+  vec3 final = mix(col*base, base, n);
+
+  float stars = smoothstep(0.9,0.95,normalnoise(np*200.+offset*0.01))*normalnoise(np*100.+offset*0.01);
+  final = mix(final, vec3(1.0), stars);
+
+  fragColor = vec4(final,1.0);
+}
+`);
 
 export class SpaceSkybox extends SkyboxCube {
   constructor(gl, props, resolution=512){
@@ -124,6 +168,11 @@ export class SpaceSkybox extends SkyboxCube {
       width: resolution, height: resolution,
       format: gl.RGB,
       type: gl.UNSIGNED_BYTE,
+      mipmaps: false,
+      parameters: {
+        [GL.TEXTURE_MAG_FILTER]: GL.LINEAR,
+        [GL.TEXTURE_MIN_FILTER]: GL.LINEAR
+      },
     });
 
     this.renderbuffer = new Renderbuffer(gl, {
@@ -159,6 +208,7 @@ export class SpaceSkybox extends SkyboxCube {
       });
       this.rttFrameBuffer.bind();
       this.fullscModel.setAttributes({vertexes: this.faceBuffers[i]});
+      this.fullscModel.setUniforms({offset: pos});
       this.fullscModel.draw();
       this.rttFrameBuffer.unbind();
     }

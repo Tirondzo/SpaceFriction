@@ -193,16 +193,16 @@ export default class AppAnimationLoop extends AnimationLoop {
         fs: FRAGMENT_SHADER,
         geometry: new ColoredCubeGeometry()
       }),
-      skybox: new SpaceSkybox(gl, {}, 512)
+      skybox: new SpaceSkybox(gl, {}, SKYBOX_RES)
     };
   }
   onRender({gl, tick, aspect, pyramid, cube, skybox, canvas}) {
     gl.clear(GL.COLOR_BUFFER_BIT | GL.DEPTH_BUFFER_BIT);
 
     updateCamera(this.camera);
-    if(this.test){
+    if(this.test || tick == Math.floor(tick/10)*10){
       this.test = false;
-      skybox.renderCubemap(gl);
+      skybox.renderCubemap(gl, this.camera.pos);
     }
 
     gl.viewport(0, 0, canvas.width, canvas.height);
