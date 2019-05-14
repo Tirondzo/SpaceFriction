@@ -1,6 +1,6 @@
 import { perlin, lerp, shuffle, range } from './perlin';
 import { Vector3 } from 'math.gl';
-import { TextureCube, Framebuffer, Renderbuffer, Texture2D, Buffer } from '@luma.gl/core';
+import { TextureCube, Framebuffer, Renderbuffer, Texture2D, Buffer, Program } from '@luma.gl/core';
 import { Model, CubeGeometry, Geometry } from '@luma.gl/core';
 import GL from '@luma.gl/constants';
 import {SIMPLEX_NOISE_3D_SHADER} from './simplex';
@@ -60,12 +60,12 @@ export function getSpaceSkyboxTextures(pos, size=512) {
 
 export class SkyboxCube extends Model {
   constructor(gl, props) {
-    const vs = `\
-attribute vec3 positions;
+    const vs = `#version 300 es
+in vec3 positions;
 uniform mat4 uModel;
 uniform mat4 uView;
 uniform mat4 uProjection;
-varying vec3 vPosition;
+out vec3 vPosition;
 void main(void) {
   gl_Position = uProjection * mat4(mat3(uView)) * vec4(positions, 1.0);
   gl_Position = gl_Position.xyww;
@@ -73,14 +73,25 @@ void main(void) {
   vPosition = positions;
 }
 `;
-    const fs = `\
+    const fs = `#version 300 es
 precision highp float;
 uniform samplerCube uTextureCube;
-varying vec3 vPosition;
+uniform samplerCube uTextureDiffCube0;
+uniform samplerCube uTextureDiffCube1;
+uniform samplerCube uTextureDiffCube2;
+uniform vec3 diff;
+in vec3 vPosition;
+out vec3 fragColor;
 void main(void) {
-  // The outer cube just samples the texture cube directly
-  gl_FragColor = textureCube(uTextureCube, normalize(vPosition) * vec3(-1.0, 1.0, 1.0));
-  //gl_FragColor = vec4(normalize(vPosition), 1.0);
+  vec3 np = normalize(vPosition) * vec3(-1.0, 1.0, 1.0);
+  vec3 curr = texture(uTextureCube, np).rgb;
+  vec3 dx = texture(uTextureDiffCube0, np).rgb*2.-1.;
+  vec3 dy = texture(uTextureDiffCube1, np).rgb*2.-1.;
+  vec3 dz = texture(uTextureDiffCube2, np).rgb*2.-1.;
+  vec3 final = curr+mat3(dx,dy,dz)*diff;
+  //vec3 final = curr + dx*diff.x + dy*diff.y + dz*diff.z;
+  fragColor = final;
+  //fragColor = -dz;
 }
 `;
 
@@ -99,23 +110,18 @@ void main(void) {
 }
 `;
 
-const SPACE_SKYBOX_GEN_FS = 
-(`#version 300 es` + CLASSIC_NOISE_3D_SHADER + `
-
-precision highp float;
-in vec3 vPosition;
-out vec4 fragColor;
-uniform vec3 offset;
+const SPACE_SKYBOX_GEN_SHADER = 
+`#version 300 es
+precision highp float;` + CLASSIC_NOISE_3D_SHADER + `
 
 float normalnoise(vec3 p){
   return cnoise(p)*.5 + .5;
 }
 
-float noise(vec3 p){
+float spaceNoise(vec3 p, vec3 dir){
   #define steps 5
   float scale = pow(2.0, float(steps));
   float displace = 0.0;
-  vec3 dir = normalize(p);
   
   displace = normalnoise(p * scale + displace*dir);
   scale *= 0.5;
@@ -135,22 +141,54 @@ vec3 coloredNoise(vec3 p){
   return vec3(normalnoise(p),normalnoise(p+10.),normalnoise(p-5.));
 }
 
-void main(void) {
-  vec3 np = normalize(vPosition);
-  vec3 p = np+offset*0.01;
-  float n = noise(p);
+vec3 getSpaceColor(vec3 np, vec3 o){
+  vec3 p = np+o*0.01;
+  float n = spaceNoise(p, np);
   n = pow(n+0.15, 6.0);
 
   vec3 col = coloredNoise(p)*.3;
-  vec3 base = vec3(.2,0.5,0.8);
-  vec3 final = mix(col*base, base, n);
+  vec3 base = vec3(0.2,0.5,0.8); //SPACE COLOR
 
-  float stars = smoothstep(0.9,0.95,normalnoise(np*200.+offset*0.01))*normalnoise(np*100.+offset*0.01);
+  vec3 final = mix(col*base, base, n);
+  float stars = smoothstep(0.9,0.95,normalnoise(np*200.+o*0.01))*normalnoise(np*100.+o*0.01);
   final = mix(final, vec3(1.0), stars);
 
-  fragColor = vec4(final,1.0);
+  return final;
+}`;
+
+const SPACE_SKYBOX_GEN_FS = 
+SPACE_SKYBOX_GEN_SHADER + `
+precision highp float;
+in vec3 vPosition;
+out vec3 fragColor;
+uniform vec3 offset;
+uniform float offsetScale;
+void main(void) {
+  vec2 delta = vec2(offsetScale, 0.0);
+  vec3 np = normalize(vPosition);
+  fragColor = ((getSpaceColor(np, offset+delta.xyy)+getSpaceColor(np, offset-delta.xyy))
+              +(getSpaceColor(np, offset+delta.yxy)+getSpaceColor(np, offset-delta.yxy))
+              +(getSpaceColor(np, offset+delta.yyx)+getSpaceColor(np, offset-delta.yyx)))*0.16666;
 }
-`);
+`;
+
+const SPACE_DIFF_SKYBOX_GEN_FS = 
+SPACE_SKYBOX_GEN_SHADER + `
+precision highp float;
+in vec3 vPosition;
+layout(location = 0) out vec3 diffX;
+layout(location = 1) out vec3 diffY;
+layout(location = 2) out vec3 diffZ;
+uniform vec3 offset;
+uniform float offsetScale;
+void main(void){
+  vec2 delta = vec2(offsetScale, 0.0);
+  vec3 np = normalize(vPosition);
+  diffX = (getSpaceColor(np, offset+delta.xyy)-getSpaceColor(np, offset-delta.xyy))*.5+.5;
+  diffY = (getSpaceColor(np, offset+delta.yxy)-getSpaceColor(np, offset-delta.yxy))*.5+.5;
+  diffZ = (getSpaceColor(np, offset+delta.yyx)-getSpaceColor(np, offset-delta.yyx))*.5+.5;
+}
+`;
 
 export class SpaceSkybox extends SkyboxCube {
   constructor(gl, props, resolution=512){
@@ -164,7 +202,7 @@ export class SpaceSkybox extends SkyboxCube {
       //for(let j = 0; j < rttCubemapData[TextureCube.FACES[i]].length; ++j) rttCubemapData[TextureCube.FACES[i]][j] = 128;
     }
     this.rttCubemap = new TextureCube(gl, {
-      data: rttCubemapData,
+      pixels: rttCubemapData,
       width: resolution, height: resolution,
       format: gl.RGB,
       type: gl.UNSIGNED_BYTE,
@@ -174,6 +212,20 @@ export class SpaceSkybox extends SkyboxCube {
         [GL.TEXTURE_MIN_FILTER]: GL.LINEAR
       },
     });
+
+    this.rttDiffCubemaps = new Array(3);
+    for(let j = 0; j < 3; ++j)
+      this.rttDiffCubemaps[j] = new TextureCube(gl, {
+        pixels: rttCubemapData,
+        width: resolution, height: resolution,
+        format: gl.RGB,
+        type: gl.UNSIGNED_BYTE,
+        mipmaps: false,
+        parameters: {
+          [GL.TEXTURE_MAG_FILTER]: GL.LINEAR,
+          [GL.TEXTURE_MIN_FILTER]: GL.LINEAR
+        },
+      });
 
     this.renderbuffer = new Renderbuffer(gl, {
       format: GL.DEPTH_COMPONENT16,
@@ -185,9 +237,14 @@ export class SpaceSkybox extends SkyboxCube {
       height: resolution,
       color: true, depth: true
     });
-    this.rttFrameBuffer.attach({
+    /*this.rttFrameBuffer.attach({
       [GL.COLOR_ATTACHMENT0]: [this.rttCubemap, GL.TEXTURE_CUBE_MAP_POSITIVE_X],
       [GL.DEPTH_ATTACHMENT]: this.renderbuffer
+    });*/
+
+    this.diffSkyboxProgram = new Program(gl, {
+      vs: SPACE_SKYBOX_GEN_VS,
+      fs: SPACE_DIFF_SKYBOX_GEN_FS
     });
 
     this.faceBuffers = new Array(6);
@@ -197,22 +254,70 @@ export class SpaceSkybox extends SkyboxCube {
       this.faceBuffers[i] = new Buffer(gl, BOX_PLANES[i]);
     }
     this.fullscModel = new Model(gl, {attributes: {positions: new Buffer(gl, FULLSC_GEOMETRY), vertexes: this.faceBuffers[0]}, vertexCount: 4, drawMode: gl.TRIANGLE_FAN, vs: SPACE_SKYBOX_GEN_VS, fs: SPACE_SKYBOX_GEN_FS});
+    this.criticalDelta = 10.0;
   }
 
   renderCubemap(gl, pos) {
+    //pos = pos.clone().multiply([1,1,-1]);
     gl.viewport(0, 0, this.resolution, this.resolution);
     for(let i=0; i < 6; ++i){
       this.rttFrameBuffer.attach({
-        [GL.COLOR_ATTACHMENT0]: [this.rttCubemap, GL.TEXTURE_CUBE_MAP_POSITIVE_X+i],
-        [GL.DEPTH_ATTACHMENT]: this.renderbuffer
-      });
+        [GL.COLOR_ATTACHMENT0]: [this.rttCubemap, GL.TEXTURE_CUBE_MAP_POSITIVE_X+i]
+      }, {resizeAttachments: false});
       this.rttFrameBuffer.bind();
       this.fullscModel.setAttributes({vertexes: this.faceBuffers[i]});
-      this.fullscModel.setUniforms({offset: pos});
+      this.fullscModel.setUniforms({offset: pos, offsetScale: this.criticalDelta});
       this.fullscModel.draw();
       this.rttFrameBuffer.unbind();
     }
     this.setUniforms({uTextureCube: this.rttCubemap});
+  }
+
+  renderCubemapDiffs(gl, pos){
+    //pos = pos.clone().multiply([1,1,-1]);
+    gl.viewport(0, 0, this.resolution, this.resolution);
+    for(let i=0; i < 6; ++i){
+      this.rttFrameBuffer.attach({
+        [GL.COLOR_ATTACHMENT0]: [this.rttDiffCubemaps[0], GL.TEXTURE_CUBE_MAP_POSITIVE_X+i],
+        [GL.COLOR_ATTACHMENT1]: [this.rttDiffCubemaps[1], GL.TEXTURE_CUBE_MAP_POSITIVE_X+i],
+        [GL.COLOR_ATTACHMENT2]: [this.rttDiffCubemaps[2], GL.TEXTURE_CUBE_MAP_POSITIVE_X+i]
+      }, {resizeAttachments: false});
+      //this.rttFrameBuffer.update({drawBuffers:[GL.COLOR_ATTACHMENT0,GL.COLOR_ATTACHMENT1,GL.COLOR_ATTACHMENT2]});
+      this.rttFrameBuffer.bind();
+      this.rttFrameBuffer.gl.drawBuffers([GL.COLOR_ATTACHMENT0,GL.COLOR_ATTACHMENT1,GL.COLOR_ATTACHMENT2]);
+      
+      this.fullscModel.setAttributes({vertexes: this.faceBuffers[i]});
+      this.diffSkyboxProgram.setUniforms({offset: pos, offsetScale: this.criticalDelta});
+      this.diffSkyboxProgram.draw({
+        drawMode: this.fullscModel.getDrawMode(),
+        vertexArray: this.fullscModel.vertexArray,
+        vertexCount: this.fullscModel.getVertexCount(),
+        indexType: this.fullscModel.indexType
+      });
+      this.rttFrameBuffer.unbind();
+    }
+    this.setUniforms({uTextureDiffCube0: this.rttDiffCubemaps[0],
+      uTextureDiffCube1: this.rttDiffCubemaps[1],
+      uTextureDiffCube2: this.rttDiffCubemaps[2]});
+  }
+
+  renderAllParts(gl, pos){
+    this.renderCubemapDiffs(gl, pos);
+    this.renderCubemap(gl, pos);
+  }
+
+  update(gl, pos){
+    if(this.oldPos !== undefined){
+      let delta = pos.clone().subtract(this.oldPos);
+      if(Math.max.apply(null, delta.map(Math.abs)) < this.criticalDelta){
+        delta.scale(1/this.criticalDelta*.5);
+        this.setUniforms({diff: delta});
+        return;
+      }
+    }
+    this.renderAllParts(gl, pos);
+    this.oldPos = pos.clone();
+    this.setUniforms({diff: [0,0,0]});
   }
 }
 

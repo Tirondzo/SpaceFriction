@@ -154,6 +154,8 @@ export default class AppAnimationLoop extends AnimationLoop {
       ...opts,
       glOptions: {
         // alpha causes issues with some glTF demos
+        webgl1: true,
+        webgl2: true,
         alpha: false
       }
     });
@@ -200,10 +202,6 @@ export default class AppAnimationLoop extends AnimationLoop {
     gl.clear(GL.COLOR_BUFFER_BIT | GL.DEPTH_BUFFER_BIT);
 
     updateCamera(this.camera);
-    if(this.test || tick == Math.floor(tick/10)*10){
-      this.test = false;
-      skybox.renderCubemap(gl, this.camera.pos);
-    }
 
     gl.viewport(0, 0, canvas.width, canvas.height);
 
@@ -266,7 +264,7 @@ export default class AppAnimationLoop extends AnimationLoop {
       });
     });
 
-
+    skybox.update(gl, this.camera.pos);
     skybox.setUniforms({
       uProjection: projection,
       uView: view
@@ -338,6 +336,12 @@ function updateCamera(camera){
   } else if (currentlyPressedKeys[40] || currentlyPressedKeys[83]) {
     // Down cursor key or S
     dpos.subtract(camera.front);
+  }
+  if (currentlyPressedKeys[81]) {
+    // Q
+    dpos.add(camera.up);
+  }else if (currentlyPressedKeys[69]) {
+    dpos.subtract(camera.up);
   }
 
   dpos.scale(.1);
