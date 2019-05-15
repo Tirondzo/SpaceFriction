@@ -341,7 +341,7 @@
           "index": 5,
           "texCoord": 0
         },
-        "metallicFactor": 0,
+        "metallicFactor": 1,
         "metallicRoughnessTexture": {
           "index": 6,
           "texCoord": 0

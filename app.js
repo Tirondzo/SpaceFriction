@@ -1,13 +1,13 @@
 import GL from '@luma.gl/constants';
-import {AnimationLoop, Model, Geometry, CubeGeometry, setParameters, log, TextureCube} from '@luma.gl/core';
+import {AnimationLoop, Model, Geometry, CubeGeometry, setParameters, log, Texture2D, TextureCube, loadImage} from '@luma.gl/core';
 import {Matrix4, Vector3, Vector4} from 'math.gl';
 import {parse} from '@loaders.gl/core';
 // eslint-disable-next-line import/no-unresolved
 import {DracoLoader} from '@loaders.gl/draco';
 import {addEvents, GLTFScenegraphLoader, createGLTFObjects, GLTFEnvironment} from '@luma.gl/addons';
-import { Program } from '@luma.gl/webgl';
+import { Program, FragmentShader } from '@luma.gl/webgl';
 import { VERTEX_SHADER, FRAGMENT_SHADER, V_SHADER, F_SHADER, VS_PBR_SHADER, PS_PBR_SHADER } from './shaders';
-import { SpaceSkybox } from './spaceSkybox';
+import { SpaceSkybox, generateSimpleCubemap } from './spaceSkybox';
 
 const INFO_HTML = `
 <p>
@@ -107,7 +107,7 @@ class ColoredCubeGeometry extends CubeGeometry {
 }
 
 class Camera{
-  constructor(pos, ang, wfront=new Vector3(0,0,1), wup=new Vector3(0,1,0)){
+  constructor(pos, ang, wfront=new Vector3(0,0,-1), wup=new Vector3(0,1,0)){
     this.pos = pos;
     this.ang = ang;
     this.front = new Vector3();
@@ -123,7 +123,7 @@ class Camera{
     this.front = new Vector3(this.viewMatrix.transformDirection(this.wfront));
     this.up = new Vector3(this.viewMatrix.transformDirection(this.wup));
     this.right = this.front.clone().cross(this.up).normalize();
-    this.viewMatrix.transpose().translate(this.pos);
+    this.viewMatrix.transpose().translate(this.pos.clone().negate());
   }
   updateCamera(dpos=new Vector3(0), dang=new Vector3(0)){
     this.pos.add(dpos);
@@ -140,7 +140,12 @@ async function loadGLTF(url, gl, options) {
     DracoLoader
   }, url);
   
-  scenes[0].traverse((node, {worldMatrix}) => log.info(4, 'Using model: ', node)());
+  scenes[0].traverse((node, {worldMatrix}) => {
+    log.info(4, 'Using model: ', node);
+    //node.model.props.defines["USE_TEX_LOD"] = 0;
+    //node.model.program = node.model._createProgram(node.props);
+    //node.model.program.fs = new FragmentShader(gl, node.model.program.fs.source.replace("USE_TEX_LOD 1", "USE_TEX_LOD 0"));
+  });
   return {scenes, animator, gltf};
 }
 
@@ -154,7 +159,7 @@ export default class AppAnimationLoop extends AnimationLoop {
       ...opts,
       glOptions: {
         // alpha causes issues with some glTF demos
-        webgl1: true,
+        webgl1: false,
         webgl2: true,
         alpha: false
       }
@@ -162,6 +167,7 @@ export default class AppAnimationLoop extends AnimationLoop {
   }
   onInitialize({canvas, gl}) {
     this.camera = new Camera(new Vector3(), new Vector3());
+    this.ship = new Camera(new Vector3(), new Vector3());
     this.loadOptions = {
       pbrDebug: true,
       imageBasedLightingEnvironment: null,
@@ -176,11 +182,51 @@ export default class AppAnimationLoop extends AnimationLoop {
       depthFunc: GL.LEQUAL
     });
 
-    const SKYBOX_RES = 512;
+    const SKYBOX_RES = 1024;
+    let skybox = new SpaceSkybox(gl, {}, SKYBOX_RES);
 
-    this.main_program = new Program(gl, {id:"main_pr", vs: VS_PBR_SHADER, fs: PS_PBR_SHADER, varyings: ['gl_Position']});
+    //make environment
+    this.BrdfTexture = new Texture2D(this.gl, {
+      id: 'brdfLUT',
+      parameters: {
+        [GL.TEXTURE_WRAP_S]: GL.CLAMP_TO_EDGE,
+        [GL.TEXTURE_WRAP_T]: GL.CLAMP_TO_EDGE,
+        [GL.TEXTURE_MIN_FILTER]: GL.LINEAR,
+        [GL.TEXTURE_MAG_FILTER]: GL.LINEAR
+      },
+      pixelStore: {
+        [this.gl.UNPACK_FLIP_Y_WEBGL]: false
+      },
+      // Texture2D accepts a promise that returns an image as data (Async Textures)
+      data: loadImage('/resources/brdfLUT.png')
+    });
+    this.DiffuseEnvSampler = generateSimpleCubemap(gl, 16, [127,127,255]);
+    this.SpecularEnvSampler = skybox.rttCubemap;
+    let environment = {
+      getDiffuseEnvSampler: x=>this.DiffuseEnvSampler,
+      getSpecularEnvSampler: x=>this.SpecularEnvSampler,
+      getBrdfTexture: x=>this.BrdfTexture
+    }
+    this.loadOptions.imageBasedLightingEnvironment = environment;
 
-    loadGLTF("/resources/space_ranger_sr1/scene.gltf", this.gl, this.loadOptions).then(result =>
+    const CUBE_FACE_TO_DIRECTION = {
+      [GL.TEXTURE_CUBE_MAP_POSITIVE_X]: 'right',
+      [GL.TEXTURE_CUBE_MAP_NEGATIVE_X]: 'left',
+      [GL.TEXTURE_CUBE_MAP_POSITIVE_Y]: 'top',
+      [GL.TEXTURE_CUBE_MAP_NEGATIVE_Y]: 'bottom',
+      [GL.TEXTURE_CUBE_MAP_POSITIVE_Z]: 'front',
+      [GL.TEXTURE_CUBE_MAP_NEGATIVE_Z]: 'back'
+    };
+    const SITE_LINK = 'https://raw.githubusercontent.com/uber-common/deck.gl-data/master/luma.gl/examples/gltf/';
+    this.environment = new GLTFEnvironment(gl, {
+      brdfLutUrl: `${SITE_LINK}/brdfLUT.png`,
+      getTexUrl: (type, dir, mipLevel) =>
+        `${SITE_LINK}/papermill/${type}/${type}_${CUBE_FACE_TO_DIRECTION[dir]}_${mipLevel}.jpg`
+    });
+    //this.environment._SpecularEnvSampler = skybox.rttCubemap;
+    //this.environment._DiffuseEnvSampler = this.DiffuseEnvSampler;
+    this.loadOptions.imageBasedLightingEnvironment = this.environment;
+    loadGLTF("/resources/45-e/scene.gltf", this.gl, this.loadOptions).then(result =>
       Object.assign(this, result)
     );
     this.test = true;
@@ -195,15 +241,13 @@ export default class AppAnimationLoop extends AnimationLoop {
         fs: FRAGMENT_SHADER,
         geometry: new ColoredCubeGeometry()
       }),
-      skybox: new SpaceSkybox(gl, {}, SKYBOX_RES)
+      skybox: skybox
     };
   }
   onRender({gl, tick, aspect, pyramid, cube, skybox, canvas}) {
     gl.clear(GL.COLOR_BUFFER_BIT | GL.DEPTH_BUFFER_BIT);
 
     updateCamera(this.camera);
-
-    gl.viewport(0, 0, canvas.width, canvas.height);
 
     const projection = new Matrix4().perspective({aspect});
     const view = this.camera.viewMatrix;
@@ -232,18 +276,26 @@ export default class AppAnimationLoop extends AnimationLoop {
     let success = true;
     if (this.scenes !== undefined)
     this.scenes[0].traverse((model, {worldMatrix}) => {
+      //if(model.id !== "mesh--primitive-0") return;
       // In glTF, meshes and primitives do no have their own matrix.
+      let pointLights = [];
+      if(triggers.cameraLight) pointLights.push({
+        color: [255, 0, 0],
+        position: this.camera.pos,
+        attenuation: [0, 0, 0.01],
+        intensity: 1.0
+      });
+      pointLights.push({
+        color: [255*.2, 255*.5, 255*.8],
+        position: this.ship.pos.clone().subtract([0,-1.28,-6.7]),
+        attenuation: [0, 0, 0.01],
+        intensity: 1.0
+      });
+
       model.updateModuleSettings({lightSources: {
-        pointLights: [
-          {
-            color: [255, 0, 0],
-            position: this.camera.pos.clone().negate(),
-            attenuation: [0, 0, 0.01],
-            intensity: 1.0
-          }
-        ],
+        pointLights: pointLights,
         ambientLight: {
-          color: [255, 255, 255],
+          color: [255*.2, 255*.5, 255*.8],
           intensity: 1.0
         }
       }});
@@ -255,16 +307,13 @@ export default class AppAnimationLoop extends AnimationLoop {
         u_MVMatrix: worldMatrix.clone().multiplyRight(view),
         u_ModelMatrix: worldMatrix,
         u_NormalMatrix: new Matrix4(worldMatrix).invert().transpose(),
-      }).draw({
-        drawMode: model.model.getDrawMode(),
-        vertexCount: model.model.getVertexCount(),
-        vertexArray: model.model.vertexArray,
-        isIndexed: true,
-        indexType: model.model.indexType,
-      });
+        u_SpecularEnvSampler: skybox.rttCubemap,
+        u_ScaleIBLAmbient: [1, 5]
+      }).draw();
     });
 
     skybox.update(gl, this.camera.pos);
+    gl.viewport(0, 0, canvas.width, canvas.height);
     skybox.setUniforms({
       uProjection: projection,
       uView: view
@@ -274,6 +323,7 @@ export default class AppAnimationLoop extends AnimationLoop {
     return success;
   }
 }
+const triggers = {};
 const currentlyPressedKeys = {};
 function addKeyboardHandler(canvas) {
   addEvents(canvas, {
@@ -282,6 +332,7 @@ function addKeyboardHandler(canvas) {
     },
     onKeyUp(e) {
       currentlyPressedKeys[e.code] = false;
+      if(e.code === 76) triggers.cameraLight = !triggers.cameraLight;
     }
   });
 }
@@ -302,7 +353,10 @@ function addPointerHandler(canvas, camera) {
     }
   }, false);
   canvas.addEventListener('click', function(e){
-    if(canvas !== document.pointerLockElement) canvas.requestPointerLock();
+    if(canvas !== document.pointerLockElement){ 
+      canvas.requestPointerLock();
+      canvas.requestFullscreen();
+    }
     else document.exitPointerLock();
   }, false);
   addEvents(canvas, {
@@ -339,9 +393,9 @@ function updateCamera(camera){
   }
   if (currentlyPressedKeys[81]) {
     // Q
-    dpos.add(camera.up);
-  }else if (currentlyPressedKeys[69]) {
     dpos.subtract(camera.up);
+  }else if (currentlyPressedKeys[69]) {
+    dpos.add(camera.up);
   }
 
   dpos.scale(.1);

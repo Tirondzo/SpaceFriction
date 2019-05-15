@@ -5,6 +5,7 @@ import { Model, CubeGeometry, Geometry } from '@luma.gl/core';
 import GL from '@luma.gl/constants';
 import {SIMPLEX_NOISE_3D_SHADER} from './simplex';
 import {CLASSIC_NOISE_3D_SHADER} from './perlin';
+import { throws } from 'assert';
 
 const FULLSC_GEOMETRY = new Float32Array([-1,-1,0,1,-1,0,1,1,0,-1,1,0]);
 
@@ -76,22 +77,15 @@ void main(void) {
     const fs = `#version 300 es
 precision highp float;
 uniform samplerCube uTextureCube;
-uniform samplerCube uTextureDiffCube0;
-uniform samplerCube uTextureDiffCube1;
-uniform samplerCube uTextureDiffCube2;
-uniform vec3 diff;
+uniform samplerCube uTextureCubeNew;
+uniform float diff;
 in vec3 vPosition;
 out vec3 fragColor;
 void main(void) {
-  vec3 np = normalize(vPosition) * vec3(-1.0, 1.0, 1.0);
+  vec3 np = normalize(vPosition);
   vec3 curr = texture(uTextureCube, np).rgb;
-  vec3 dx = texture(uTextureDiffCube0, np).rgb*2.-1.;
-  vec3 dy = texture(uTextureDiffCube1, np).rgb*2.-1.;
-  vec3 dz = texture(uTextureDiffCube2, np).rgb*2.-1.;
-  vec3 final = curr+mat3(dx,dy,dz)*diff;
-  //vec3 final = curr + dx*diff.x + dy*diff.y + dz*diff.z;
-  fragColor = final;
-  //fragColor = -dz;
+  vec3 new = texture(uTextureCubeNew, np).rgb;
+  fragColor = mix(curr,new,diff);
 }
 `;
 
@@ -142,7 +136,7 @@ vec3 coloredNoise(vec3 p){
 }
 
 vec3 getSpaceColor(vec3 np, vec3 o){
-  vec3 p = np+o*0.01;
+  vec3 p = np+o*0.001;
   float n = spaceNoise(p, np);
   n = pow(n+0.15, 6.0);
 
@@ -153,7 +147,7 @@ vec3 getSpaceColor(vec3 np, vec3 o){
   float stars = smoothstep(0.9,0.95,normalnoise(np*200.+o*0.01))*normalnoise(np*100.+o*0.01);
   final = mix(final, vec3(1.0), stars);
 
-  return final;
+  return clamp(final, 0.0, 1.0);
 }`;
 
 const SPACE_SKYBOX_GEN_FS = 
@@ -162,13 +156,12 @@ precision highp float;
 in vec3 vPosition;
 out vec3 fragColor;
 uniform vec3 offset;
-uniform float offsetScale;
 void main(void) {
-  vec2 delta = vec2(offsetScale, 0.0);
   vec3 np = normalize(vPosition);
-  fragColor = ((getSpaceColor(np, offset+delta.xyy)+getSpaceColor(np, offset-delta.xyy))
-              +(getSpaceColor(np, offset+delta.yxy)+getSpaceColor(np, offset-delta.yxy))
-              +(getSpaceColor(np, offset+delta.yyx)+getSpaceColor(np, offset-delta.yyx)))*0.16666;
+  //fragColor = ((getSpaceColor(np, offset+delta.xyy)+getSpaceColor(np, offset-delta.xyy))
+  //            +(getSpaceColor(np, offset+delta.yxy)+getSpaceColor(np, offset-delta.yxy))
+  //            +(getSpaceColor(np, offset+delta.yyx)+getSpaceColor(np, offset-delta.yyx)))*0.16666;
+  fragColor = getSpaceColor(np, offset);
 }
 `;
 
@@ -213,7 +206,7 @@ export class SpaceSkybox extends SkyboxCube {
       },
     });
 
-    this.rttDiffCubemaps = new Array(3);
+    /*this.rttDiffCubemaps = new Array(3);
     for(let j = 0; j < 3; ++j)
       this.rttDiffCubemaps[j] = new TextureCube(gl, {
         pixels: rttCubemapData,
@@ -225,7 +218,19 @@ export class SpaceSkybox extends SkyboxCube {
           [GL.TEXTURE_MAG_FILTER]: GL.LINEAR,
           [GL.TEXTURE_MIN_FILTER]: GL.LINEAR
         },
-      });
+      });*/
+    
+    this.rttNewCubemap = new TextureCube(gl, {
+      pixels: rttCubemapData,
+      width: resolution, height: resolution,
+      format: gl.RGB,
+      type: gl.UNSIGNED_BYTE,
+      mipmaps: false,
+      parameters: {
+        [GL.TEXTURE_MAG_FILTER]: GL.LINEAR,
+        [GL.TEXTURE_MIN_FILTER]: GL.LINEAR
+      },
+    });
 
     this.renderbuffer = new Renderbuffer(gl, {
       format: GL.DEPTH_COMPONENT16,
@@ -257,12 +262,13 @@ export class SpaceSkybox extends SkyboxCube {
     this.criticalDelta = 10.0;
   }
 
-  renderCubemap(gl, pos) {
-    //pos = pos.clone().multiply([1,1,-1]);
+  renderCubemap(gl, pos, cubemap) {
+    if(!cubemap) cubemap = this.rttCubemap;
+    pos = pos.clone().multiply([-1,1,-1]);
     gl.viewport(0, 0, this.resolution, this.resolution);
     for(let i=0; i < 6; ++i){
       this.rttFrameBuffer.attach({
-        [GL.COLOR_ATTACHMENT0]: [this.rttCubemap, GL.TEXTURE_CUBE_MAP_POSITIVE_X+i]
+        [GL.COLOR_ATTACHMENT0]: [cubemap, GL.TEXTURE_CUBE_MAP_POSITIVE_X+i]
       }, {resizeAttachments: false});
       this.rttFrameBuffer.bind();
       this.fullscModel.setAttributes({vertexes: this.faceBuffers[i]});
@@ -270,7 +276,7 @@ export class SpaceSkybox extends SkyboxCube {
       this.fullscModel.draw();
       this.rttFrameBuffer.unbind();
     }
-    this.setUniforms({uTextureCube: this.rttCubemap});
+    this.setUniforms({uTextureCube: this.rttCubemap, uTextureCubeNew: this.rttNewCubemap});
   }
 
   renderCubemapDiffs(gl, pos){
@@ -306,21 +312,80 @@ export class SpaceSkybox extends SkyboxCube {
     this.renderCubemap(gl, pos);
   }
 
+  renderNewCubemapSlowly(gl, pos){
+    let cubemap = this.rttNewCubemap;
+    if(this.progress === undefined){
+      this.progress = 0;
+      this.MAX_PROGRESS = 36;
+    }
+    //pos = pos.clone().multiply([1,1,-1]);
+    gl.viewport(0, 0, this.resolution, this.resolution);
+    if(this.progress < this.MAX_PROGRESS && Math.floor(this.progress/6)*6===this.progress){
+      console.log(this.progress);
+      let i = Math.floor(this.progress/6);
+      this.rttFrameBuffer.attach({
+        [GL.COLOR_ATTACHMENT0]: [this.rttNewCubemap, GL.TEXTURE_CUBE_MAP_POSITIVE_X+i]
+      }, {resizeAttachments: false});
+      this.rttFrameBuffer.bind();
+      this.fullscModel.setAttributes({vertexes: this.faceBuffers[i]});
+      this.fullscModel.setUniforms({offset: pos, offsetScale: this.criticalDelta});
+      this.fullscModel.draw();
+      this.rttFrameBuffer.unbind();
+    }
+    this.progress++;
+    this.setUniforms({uTextureCube: this.rttCubemap, uTextureCubeNew: this.rttNewCubemap});
+  }
+
   update(gl, pos){
     if(this.oldPos !== undefined){
       let delta = pos.clone().subtract(this.oldPos);
-      if(Math.max.apply(null, delta.map(Math.abs)) < this.criticalDelta){
-        delta.scale(1/this.criticalDelta*.5);
+      delta = Math.min(this.criticalDelta, Math.sqrt(delta.dot(delta)));
+      if(delta < this.criticalDelta){
+        delta/=this.criticalDelta;
         this.setUniforms({diff: delta});
         return;
       }
     }
-    this.renderAllParts(gl, pos);
+    //SWAP
+    [this.rttCubemap, this.rttNewCubemap] = [this.rttNewCubemap, this.rttCubemap];
+    if(this.oldPos === undefined) this.renderCubemap(gl, pos, this.rttCubemap);
+    this.renderCubemap(gl, pos, this.rttNewCubemap);
     this.oldPos = pos.clone();
-    this.setUniforms({diff: [0,0,0]});
+    this.setUniforms({
+      uTextureCube: this.rttCubemap, 
+      uTextureCubeNew: this.rttNewCubemap, 
+      diff: 0.0});
+    this.progress = 0;
   }
 }
 
-export function renderSpaceSkybox(cubemap){
-
+export function generateSimpleCubemapData(gl, resolution, color=[255,255,255]){
+  let texture = {};
+  let face = 0;
+  for(let i = 0; i < 6; i++){
+    const textureData = new Uint8Array(resolution*resolution*3);
+    let textureIndex = 0;
+    for(let x = 0; x < resolution; x++){
+      for(let y = 0; y < resolution; y++){
+        textureData[textureIndex++] = color[0];
+        textureData[textureIndex++] = color[1];
+        textureData[textureIndex++] = color[2];
+      }
+    }
+    texture[TextureCube.FACES[face++]] = textureData;
+  }
+  return texture;
+}
+export function generateSimpleCubemap(gl, resolution, color=[255,255,255]){
+  return new TextureCube(gl, {
+    pixels: generateSimpleCubemapData(gl, resolution, color),
+    width: resolution, height: resolution,
+    format: gl.RGB,
+    type: gl.UNSIGNED_BYTE,
+    mipmaps: false,
+    parameters: {
+      [GL.TEXTURE_MAG_FILTER]: GL.LINEAR,
+      [GL.TEXTURE_MIN_FILTER]: GL.LINEAR
+    },
+  });
 }
