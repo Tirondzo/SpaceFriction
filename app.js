@@ -1,12 +1,14 @@
 import GL from '@luma.gl/constants';
-import {AnimationLoop, Model, Geometry, CubeGeometry, setParameters, log, Texture2D, TextureCube, loadImage} from '@luma.gl/core';
+import {AnimationLoop, Model, Geometry, CubeGeometry, setParameters, log, 
+  Texture2D, TextureCube, loadImage, Framebuffer, clear} from '@luma.gl/core';
 import {Matrix4, Vector3, Vector4} from 'math.gl';
 import {parse} from '@loaders.gl/core';
 // eslint-disable-next-line import/no-unresolved
 import {DracoLoader} from '@loaders.gl/draco';
 import {addEvents, GLTFScenegraphLoader, createGLTFObjects, GLTFEnvironment} from '@luma.gl/addons';
-import { Program, FragmentShader } from '@luma.gl/webgl';
-import { VERTEX_SHADER, FRAGMENT_SHADER, V_SHADER, F_SHADER, VS_PBR_SHADER, PS_PBR_SHADER } from './shaders';
+import { Program, FragmentShader, VertexShader } from '@luma.gl/webgl';
+import { VERTEX_SHADER, FRAGMENT_SHADER, SHADOWMAP_VERTEX, SHADOWMAP_FRAGMENT, 
+  PBR_VS_WITH_SHADOWMAP, PBR_FS_WITH_SHADOWMAP } from './shaders';
 import { SpaceSkybox, generateSimpleCubemap } from './spaceSkybox';
 
 const INFO_HTML = `
@@ -142,6 +144,9 @@ async function loadGLTF(url, gl, options) {
   
   scenes[0].traverse((node, {worldMatrix}) => {
     log.info(4, 'Using model: ', node);
+    if (options.pbrShadowProgram){
+      options.pbrShadowProgram.setUniforms(node.model.program.uniforms);
+    }
     //node.model.props.defines["USE_TEX_LOD"] = 0;
     //node.model.program = node.model._createProgram(node.props);
     //node.model.program.fs = new FragmentShader(gl, node.model.program.fs.source.replace("USE_TEX_LOD 1", "USE_TEX_LOD 0"));
@@ -226,9 +231,13 @@ export default class AppAnimationLoop extends AnimationLoop {
     //this.environment._SpecularEnvSampler = skybox.rttCubemap;
     //this.environment._DiffuseEnvSampler = this.DiffuseEnvSampler;
     this.loadOptions.imageBasedLightingEnvironment = this.environment;
+    this.shadowProgram = new Program(gl, {vs: SHADOWMAP_VERTEX, fs:SHADOWMAP_FRAGMENT});
+    this.pbrShadowProgram = new Program(gl, {vs: PBR_VS_WITH_SHADOWMAP, fs:PBR_FS_WITH_SHADOWMAP});
+    this.loadOptions.pbrShadowProgram = this.pbrShadowProgram;
     loadGLTF("/resources/45-e/scene.gltf", this.gl, this.loadOptions).then(result =>
       Object.assign(this, result)
     );
+    
     this.test = true;
     return {
       pyramid: new Model(gl, {
@@ -241,16 +250,54 @@ export default class AppAnimationLoop extends AnimationLoop {
         fs: FRAGMENT_SHADER,
         geometry: new ColoredCubeGeometry()
       }),
+      fbShadow: new Framebuffer(gl, {id: 'shadowmap', width: 1024, height: 1024}),
       skybox: skybox
     };
   }
-  onRender({gl, tick, aspect, pyramid, cube, skybox, canvas}) {
+  onRender({gl, tick, aspect, pyramid, cube, skybox, fbShadow, canvas}) {
     gl.clear(GL.COLOR_BUFFER_BIT | GL.DEPTH_BUFFER_BIT);
 
     updateCamera(this.camera);
 
     const projection = new Matrix4().perspective({aspect});
     const view = this.camera.viewMatrix;
+
+    const engineLightDelta = [0,-0.28,-6.7];
+    this.engineLight = this.ship.pos.clone().subtract(engineLightDelta);
+    this.engineView = this.ship.viewMatrix.clone().translate(engineLightDelta);
+    const shadowProj = new Matrix4().ortho({
+      left: -4,
+      right: 4,
+      bottom: -4,
+      top: 4,
+      near: 0,
+      far: 64
+    });
+
+    gl.viewport(0,0,fbShadow.width,fbShadow.height);
+    clear(gl, {framebuffer: fbShadow, color: [1, 1, 1, 1], depth: true});
+    gl.cullFace(GL.FRONT_AND_BACK);
+    if (this.scenes !== undefined)
+    this.scenes[0].traverse((model, {worldMatrix}) => {
+      //if(model.id !== "mesh--primitive-0") return;
+      // In glTF, meshes and primitives do no have their own matrix.
+
+      const u_MVPMatrix = new Matrix4(shadowProj).multiplyRight(this.engineView).multiplyRight(worldMatrix);
+      let old_program = model.model.program;
+      model.model.program = this.shadowProgram;
+      model.setUniforms({
+        u_MVPMatrix
+      }).draw({
+        framebuffer: fbShadow,
+        drawMode: model.model.getDrawMode(),
+        vertexCount: model.model.getVertexCount(),
+        vertexArray: model.model.vertexArray,
+        isIndexed: true,
+        indexType: model.model.indexType,
+      });
+      model.model.program = old_program;
+    });
+    gl.viewport(0,0,canvas.width,canvas.height);
 
     pyramid
     .setUniforms({
@@ -276,18 +323,17 @@ export default class AppAnimationLoop extends AnimationLoop {
     let success = true;
     if (this.scenes !== undefined)
     this.scenes[0].traverse((model, {worldMatrix}) => {
-      //if(model.id !== "mesh--primitive-0") return;
       // In glTF, meshes and primitives do no have their own matrix.
       let pointLights = [];
-      if(triggers.cameraLight) pointLights.push({
-        color: [255, 0, 0],
-        position: this.camera.pos,
+      pointLights.push({
+        color: [255*.2, 255*.5, 255*.8],
+        position: this.engineLight,
         attenuation: [0, 0, 0.01],
         intensity: 1.0
       });
-      pointLights.push({
-        color: [255*.2, 255*.5, 255*.8],
-        position: this.ship.pos.clone().subtract([0,-1.28,-6.7]),
+      if(triggers.cameraLight) pointLights.push({
+        color: [255, 0, 0],
+        position: this.camera.pos,
         attenuation: [0, 0, 0.01],
         intensity: 1.0
       });
@@ -299,17 +345,27 @@ export default class AppAnimationLoop extends AnimationLoop {
           intensity: 1.0
         }
       }});
+      const u_MSVSPMatirx = new Matrix4(shadowProj).multiplyRight(this.engineView).multiplyRight(worldMatrix);
       const u_MVPMatrix = new Matrix4(projection).multiplyRight(view).multiplyRight(worldMatrix);
+      let old_program = model.model.program;
+      if(model.id === "Cube.021_0-primitive-0") model.model.program = this.pbrShadowProgram;
+      this.pbrShadowProgram.setUniforms(old_program.uniforms);
       model.setUniforms({
         u_Camera: this.camera.pos,
-        u_MVPMatrix,
-        u_PMatrix: projection,
-        u_MVMatrix: worldMatrix.clone().multiplyRight(view),
+        u_MVPMatrix, u_MSVSPMatirx,
+        u_ShadowMap: fbShadow,
         u_ModelMatrix: worldMatrix,
         u_NormalMatrix: new Matrix4(worldMatrix).invert().transpose(),
         u_SpecularEnvSampler: skybox.rttCubemap,
         u_ScaleIBLAmbient: [1, 5]
-      }).draw();
+      }).draw({
+        drawMode: model.model.getDrawMode(),
+        vertexCount: model.model.getVertexCount(),
+        vertexArray: model.model.vertexArray,
+        isIndexed: true,
+        indexType: model.model.indexType
+      });
+      model.model.program = old_program;
     });
 
     skybox.update(gl, this.camera.pos);

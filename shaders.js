@@ -208,9 +208,6 @@ void pbr_setPositionNormalTangentUV(vec4 position, vec4 normal, vec4 tangent, ve
 }
 // END MODULE_pbr
 
-uniform u_MSVSPMatirx;
-out vec4 shadowCoord;
-
 #if (__VERSION__ < 300)
   #define _attr attribute
 #else
@@ -230,6 +227,9 @@ out vec4 shadowCoord;
   #ifdef HAS_UV
     _attr vec2 TEXCOORD_0;
   #endif
+  
+  uniform mat4 u_MSVSPMatirx;
+  out vec4 shadowCoord;
 
   void main(void) {
     vec4 _NORMAL = vec4(0.);
@@ -438,7 +438,8 @@ in mat3 pbr_vTBN;
 in vec3 pbr_vNormal;
 #endif
 #endif
-
+uniform sampler2D u_ShadowMap;
+in vec4 shadowCoord;
 
 struct PBRInfo
 {
@@ -684,7 +685,9 @@ vec4 pbr_filterColor(vec4 colorUnused)
     if (i < lighting_uPointLightCount) {
       PBRInfo_setPointLight(pbrInputs, lighting_uPointLight[i]);
       float attenuation = getPointLightAttenuation(lighting_uPointLight[i], distance(lighting_uPointLight[i].position, pbr_vPosition));
-      if(i == 0 && texture2D(uShadowMap, shadowCoord.xy).z < shadowCoord.z - 0.005) out_shadow = 0.0;
+      //out_shadow = shadowCoord.z;
+      out_shadow = 1.0;
+      if(i == 0 && (texture(u_ShadowMap, shadowCoord.xy).z < shadowCoord.z - 0.005)) out_shadow = 0.0;
       color += calculateFinalColor(pbrInputs, lighting_uPointLight[i].color / attenuation)*out_shadow;
     }
   }
@@ -724,10 +727,9 @@ vec4 pbr_filterColor(vec4 colorUnused)
   out vec4 fragmentColor;
 #endif
 
-uniform sampler2D uShadowMap;
-in vec4 shadowCoord;
-
   void main(void) {
     fragmentColor = pbr_filterColor(vec4(0));
+    //Visual debug: Shadow area
+    //if(texture(u_ShadowMap, shadowCoord.xy).z < shadowCoord.z - 0.005) fragmentColor=vec4(1,0,0,1);
   }
 `;
