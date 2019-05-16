@@ -260,7 +260,16 @@ export default class AppAnimationLoop extends AnimationLoop {
     updateCamera(this.camera);
 
     const projection = new Matrix4().perspective({aspect});
-    const view = this.camera.viewMatrix;
+
+    const ship_delta_view = [0,-3,-15];
+    const view = triggers.freeCamera ? this.camera.viewMatrix : this.ship.viewMatrix.clone().translate(ship_delta_view);
+    let view_pos = triggers.freeCamera ? this.camera.pos : this.ship.pos.clone().subtract(ship_delta_view);
+    if(!triggers.freeCamera){
+      const rotateMatrix = new Matrix4().rotateXYZ(this.camera.ang);
+      view.multiplyRight(rotateMatrix);
+      view_pos = rotateMatrix.transpose().transformPoint(view_pos);
+      this.camera.pos = view_pos;
+    }
 
     const engineLightDelta = [0,-0.28,-6.7];
     this.engineLight = this.ship.pos.clone().subtract(engineLightDelta);
@@ -276,7 +285,8 @@ export default class AppAnimationLoop extends AnimationLoop {
 
     gl.viewport(0,0,fbShadow.width,fbShadow.height);
     clear(gl, {framebuffer: fbShadow, color: [1, 1, 1, 1], depth: true});
-    gl.cullFace(GL.FRONT_AND_BACK);
+    //gl.cullFace(GL.BACK);
+    //gl.enable(GL.CULL_FACE);
     if (this.scenes !== undefined)
     this.scenes[0].traverse((model, {worldMatrix}) => {
       //if(model.id !== "mesh--primitive-0") return;
@@ -333,7 +343,7 @@ export default class AppAnimationLoop extends AnimationLoop {
       });
       if(triggers.cameraLight) pointLights.push({
         color: [255, 0, 0],
-        position: this.camera.pos,
+        position: view_pos,
         attenuation: [0, 0, 0.01],
         intensity: 1.0
       });
@@ -351,7 +361,7 @@ export default class AppAnimationLoop extends AnimationLoop {
       if(model.id === "Cube.021_0-primitive-0") model.model.program = this.pbrShadowProgram;
       this.pbrShadowProgram.setUniforms(old_program.uniforms);
       model.setUniforms({
-        u_Camera: this.camera.pos,
+        u_Camera: view_pos,
         u_MVPMatrix, u_MSVSPMatirx,
         u_ShadowMap: fbShadow,
         u_ModelMatrix: worldMatrix,
@@ -368,7 +378,7 @@ export default class AppAnimationLoop extends AnimationLoop {
       model.model.program = old_program;
     });
 
-    skybox.update(gl, this.camera.pos);
+    skybox.update(gl, view_pos);
     gl.viewport(0, 0, canvas.width, canvas.height);
     skybox.setUniforms({
       uProjection: projection,
@@ -388,7 +398,9 @@ function addKeyboardHandler(canvas) {
     },
     onKeyUp(e) {
       currentlyPressedKeys[e.code] = false;
-      if(e.code === 76) triggers.cameraLight = !triggers.cameraLight;
+      if(e.code === 76) triggers.cameraLight = !triggers.cameraLight; //L
+      if(e.code === 86) triggers.freeCamera = !triggers.freeCamera; //V
+
     }
   });
 }
