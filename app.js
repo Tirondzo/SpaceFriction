@@ -30,8 +30,10 @@ const CONTROLS = {
   ROLL_RIGHT: KeyCode.KEY_E,
   MOVE_DOWN: KeyCode.KEY_C,
   MOVE_UP: KeyCode.KEY_Z,
+  RESET_CAMERA: KeyCode.KEY_X,
   TARGET_VIEW: KeyCode.KEY_V,
-  TARGET_LIGHT: KeyCode.KEY_L
+  TARGET_LIGHT: KeyCode.KEY_L,
+  DEBUG_BASIS: KeyCode.KEY_P
 }
 
 Matrix4.prototype.removeTranslate = function(){
@@ -160,6 +162,11 @@ class Camera{
     let quat = new Quaternion().setAxisAngle(this.up, dang[0])
       .multiply(new Quaternion().setAxisAngle(this.right, dang[1]))
       .multiply(new Quaternion().setAxisAngle(this.front, dang[2]));
+    
+    this.applyQuaternion(quat);
+    this.updateVectors(transpose);
+  }
+  applyQuaternion(quat){
     let u = new Vector3(quat);
     let s = quat.w; let ss = quat.w*quat.w;
     let uv = u.dot(this.wfront);
@@ -169,8 +176,6 @@ class Camera{
     uv = u.dot(this.wup);
     cuv = u.clone().cross(this.wup);
     this.wup = this.wup.scale(ss - uu).add(u.clone().scale(2*uv)).add(cuv.scale(2*s));
-
-    this.updateVectors(transpose);
   }
 }
 
@@ -194,7 +199,7 @@ async function loadGLTF(url, gl, options) {
   return {scenes, animator, gltf};
 }
 
-const SHIP_DELTA = new Vector3([0,0,0]);
+const SHIP_DELTA = new Vector3([0,0,-15]);
 export default class AppAnimationLoop extends AnimationLoop {
   // .context(() => createGLContext({canvas: 'lesson04-canvas'}))
   static getInfo() {
@@ -323,6 +328,12 @@ export default class AppAnimationLoop extends AnimationLoop {
     ship_view_trans.translate(this.ship.pos.clone().negate());*/
     let view_pos = this.camera.pos;
     let view = this.camera.viewMatrix;
+    if(!triggers.freeCamera){
+      view = this.ship.viewMatrix.clone().removeTranslate().transpose();
+      const vmat = new Matrix4().translate(SHIP_DELTA).multiplyRight(this.camera.viewMatrix.clone().removeTranslate());
+      view.multiplyLeft(vmat);
+      view.translate(this.ship.pos.clone().negate());
+    }
 
     const engineLightDelta = [0,-0.28,-6.7];
     this.engineLight = ship_view_trans.transformDirection(engineLightDelta);
@@ -384,34 +395,16 @@ export default class AppAnimationLoop extends AnimationLoop {
     })
     .draw();
 
-    cube
-    .setUniforms({
-      uPMatrix: projection,
-      uMVMatrix: view.clone().multiplyRight(this.ship.viewMatrix.clone().scale(.3))
-      .clone()
-    })
-    .draw();
-    cube
-    .setUniforms({
-      uPMatrix: projection,
-      uMVMatrix: view.clone().multiplyRight(new Matrix4().translate(this.ship.front.clone().scale(3))).multiplyRight(this.ship.viewMatrix.clone().scale(.3))
-      .clone()
-    })
-    .draw();
-    cube
-    .setUniforms({
-      uPMatrix: projection,
-      uMVMatrix: view.clone().multiplyRight(new Matrix4().translate(this.ship.up.clone().scale(3))).multiplyRight(this.ship.viewMatrix.clone().scale(.3))
-      .clone()
-    })
-    .draw();
-    cube
-    .setUniforms({
-      uPMatrix: projection,
-      uMVMatrix: view.clone().multiplyRight(new Matrix4().translate(this.ship.right.clone().scale(3))).multiplyRight(this.ship.viewMatrix.clone().scale(.3))
-      .clone()
-    })
-    .draw();
+    if(triggers.debugBasis)
+    for(const vec of [this.ship.front,this.ship.up,this.ship.right]){
+      cube
+      .setUniforms({
+        uPMatrix: projection,
+        uMVMatrix: view.clone().multiplyRight(new Matrix4().translate(vec.clone().scale(3)))
+                                .multiplyRight(this.ship.viewMatrix.clone().scale(.3))
+        .clone()
+      }).draw();
+    }
 
     let success = true;
     if (this.scenes !== undefined)
@@ -481,9 +474,9 @@ function addKeyboardHandler(canvas) {
     },
     onKeyUp(e) {
       currentlyPressedKeys[e.code] = false;
-      if(e.code === 76) triggers.cameraLight = !triggers.cameraLight; //L
-      if(e.code === 86) triggers.freeCamera = !triggers.freeCamera; //V
-
+      if(e.code === CONTROLS.TARGET_LIGHT) triggers.cameraLight = !triggers.cameraLight;
+      if(e.code === CONTROLS.TARGET_VIEW) triggers.freeCamera = !triggers.freeCamera;
+      if(e.code === CONTROLS.DEBUG_BASIS) triggers.debugBasis = !triggers.debugBasis;
     }
   });
 }
@@ -557,20 +550,15 @@ function updateCamera(camera, ship, tick){
   }else if (currentlyPressedKeys[CONTROLS.ROLL_RIGHT]) {
     roll += .25;
   }
+  if (currentlyPressedKeys[CONTROLS.RESET_CAMERA]){
+    camera.applyQuaternion(new Quaternion().slerp({target: new Quaternion().rotationTo(camera.up, [0,1,0]), ratio: Math.min(1.0, k)}));
+  }
 
   if(!triggers.freeCamera){
-    //let rotateMat = new Matrix4().rotateAxis(kdpos[1]*.1,ship.right.clone().negate()).rotateAxis(kdpos[0]*-.1,ship.up.clone().negate()).clone();
-    /*let rotateMat = new Matrix4().fromQuaternion(new Quaternion().setAxisAngle(ship.up, kdpos[0]*-.1).multiply(new Quaternion().setAxisAngle(ship.right, kdpos[1]*.1)));
-    ship.pos.add(ship.front.clone().scale(kdpos[2]*.1));
-    ship.wup = rotateMat.transformDirection(ship.wup.clone(), new Vector3());
-    ship.wfront = rotateMat.transformDirection(ship.wfront.clone(), new Vector3());
-    ship.updateVectors(false);*/
-
     k *= .5;
-    ship.updateCamera(ship.front.clone().scale(kdpos[2]*k), new Vector3(kdpos[0]*k,kdpos[1]*k,roll*k), false);
-   // ship.viewMatrix.translate(SHIP_DELTA).multiplyRight(rotateMat).translate(SHIP_DELTA.clone().negate());
+    ship.updateCamera(ship.front.clone().scale(-kdpos[2]*k), new Vector3(-kdpos[0]*k*.25,kdpos[1]*k*.25,roll*k), false);
+    camera.updateVectors();
   }
-  //if(dpos.dot(new Vector3())!==0)
   if(triggers.freeCamera)
     camera.updateCamera(dpos.negate().scale(k), new Vector3(0,0,roll*k));
 }
