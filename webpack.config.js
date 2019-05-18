@@ -12,7 +12,7 @@ const CONFIG = {
     fs: "empty"
   },
 
-  plugins: [new HtmlWebpackPlugin({title: 'Instancing'})]
+  plugins: [new HtmlWebpackPlugin({title: 'Instancing',template: 'index.html'})]
 };
 
 // This line enables bundling against src in this repo rather than installed module

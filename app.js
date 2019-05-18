@@ -11,6 +11,7 @@ import { VERTEX_SHADER, FRAGMENT_SHADER, SHADOWMAP_VERTEX, SHADOWMAP_FRAGMENT,
   PBR_VS_WITH_SHADOWMAP, PBR_FS_WITH_SHADOWMAP } from './shaders';
 import { SpaceSkybox, generateSimpleCubemap } from './spaceSkybox';
 import * as KeyCode from 'keycode-js';
+import * as Stats from 'stats.js';
 
 const INFO_HTML = `
 <p>
@@ -34,7 +35,8 @@ const CONTROLS = {
   TARGET_VIEW: KeyCode.KEY_V,
   TARGET_LIGHT: KeyCode.KEY_L,
   DEBUG_BASIS: KeyCode.KEY_P,
-  MOVE_FAST: KeyCode.KEY_SHIFT
+  MOVE_FAST: KeyCode.KEY_SHIFT,
+  FPS_COUNTER: KeyCode.KEY_F
 }
 
 Matrix4.prototype.removeTranslate = function(){
@@ -216,6 +218,7 @@ export default class AppAnimationLoop extends AnimationLoop {
         alpha: false
       }
     });
+    if(opts.fpsMeter) this.fpsMeter = opts.fpsMeter;
   }
   onInitialize({canvas, gl}) {
     this.camera = new Camera(new Vector3());
@@ -302,6 +305,7 @@ export default class AppAnimationLoop extends AnimationLoop {
     };
   }
   onRender({gl, tick, aspect, pyramid, cube, skybox, fbShadow, canvas}) {
+    if(this.fpsMeter) this.fpsMeter.begin();
     gl.clear(GL.COLOR_BUFFER_BIT | GL.DEPTH_BUFFER_BIT);
 
     this.lastTick = this.lastTick ? this.lastTick : tick;
@@ -311,22 +315,6 @@ export default class AppAnimationLoop extends AnimationLoop {
     updateCamera(this.camera, this.ship, deltaTick);
 
     const projection = new Matrix4().perspective({aspect});
-    let ship_view_trans = this.ship.viewMatrix.clone();
-    /*ship_view_trans.removeTranslate();
-    const ship_delta = ship_view_trans.transformDirection(SHIP_DELTA);
-    let view = triggers.freeCamera ? this.camera.viewMatrix.clone() : ship_view_trans;
-    let view_pos = triggers.freeCamera ? this.camera.pos.clone() : ship_delta.clone();
-    if(!triggers.freeCamera){
-      //const rotateMatrix = new Matrix4().rotateAxis(this.camera.ang[0],this.ship.right).rotateAxis(this.camera.ang[1],this.ship.up);
-      //view.translate(view_pos).multiplyRight(rotateMatrix);
-      //view_pos = rotateMatrix.transpose().transformPoint(view_pos);
-      view_pos.add(this.ship.pos);
-      //this.camera.pos = view_pos;
-      //view.removeTranslate().translate(view_pos.clone().negate());
-
-      
-    }
-    ship_view_trans.translate(this.ship.pos.clone().negate());*/
     let view_pos = this.camera.pos;
     let view = this.camera.viewMatrix;
     if(!triggers.freeCamera || triggers.backToFreeCam){
@@ -349,7 +337,7 @@ export default class AppAnimationLoop extends AnimationLoop {
     }
 
     const engineLightDelta = [0,-0.28,-6.7];
-    this.engineLight = ship_view_trans.transformDirection(engineLightDelta);
+    this.engineLight = this.ship.viewMatrix.transformDirection(engineLightDelta);
     this.engineView = this.ship.viewMatrix.clone().removeTranslate().translate(this.engineLight);
     this.engineLight.negate();
     const shadowProj = new Matrix4().ortho({
@@ -370,7 +358,7 @@ export default class AppAnimationLoop extends AnimationLoop {
       //if(model.id !== "mesh--primitive-0") return;
       // In glTF, meshes and primitives do no have their own matrix.
 
-      const u_MVPMatrix = new Matrix4(shadowProj).multiplyRight(this.engineView).multiplyRight(ship_view_trans).multiplyRight(worldMatrix);
+      const u_MVPMatrix = new Matrix4(shadowProj).multiplyRight(this.engineView).multiplyRight(this.ship.viewMatrix).multiplyRight(worldMatrix);
       let old_program = model.model.program;
       model.model.program = this.shadowProgram;
       model.setUniforms({
@@ -444,8 +432,8 @@ export default class AppAnimationLoop extends AnimationLoop {
           intensity: 1.0
         }
       }});
-      const u_MSVSPMatirx = new Matrix4(shadowProj).multiplyRight(this.engineView).multiplyRight(ship_view_trans);
-      const u_MVPMatrix = new Matrix4(projection).multiplyRight(view).multiplyRight(ship_view_trans);
+      //const u_MSVSPMatirx = new Matrix4(shadowProj).multiplyRight(this.engineView).multiplyRight(ship_view_trans);
+      //const u_MVPMatrix = new Matrix4(projection).multiplyRight(view).multiplyRight(ship_view_trans);
       let old_program = model.model.program;
       if(model.id === "Cube.021_0-primitive-0") model.model.program = this.pbrShadowProgram;
       this.pbrShadowProgram.setUniforms(old_program.uniforms);
@@ -475,6 +463,7 @@ export default class AppAnimationLoop extends AnimationLoop {
     }).draw();
     //skybox.fullscModel.draw();
 
+    if(this.fpsMeter) this.fpsMeter.end();
     return success;
   }
 }
@@ -492,6 +481,10 @@ function addKeyboardHandler(canvas) {
       if(e.code === CONTROLS.DEBUG_BASIS) triggers.debugBasis = !triggers.debugBasis;
 
       if(e.code === CONTROLS.TARGET_VIEW && triggers.freeCamera) triggers.backToFreeCam = true;
+
+      let tmp;
+      if(e.code === CONTROLS.FPS_COUNTER && (tmp=document.getElementById("fps-meter"))) 
+        tmp.style.display = (triggers.hideFPS = !triggers.hideFPS) ? "none" : "";
     }
   });
 }
@@ -514,7 +507,8 @@ function addPointerHandler(canvas, camera) {
   canvas.addEventListener('click', function(e){
     if(canvas !== document.pointerLockElement){ 
       canvas.requestPointerLock();
-      canvas.requestFullscreen();
+      let fsContainer = document.getElementById('fs-container') || canvas;
+      fsContainer.requestFullscreen();
     }
     else document.exitPointerLock();
   }, false);
@@ -582,8 +576,21 @@ function updateCamera(camera, ship, tick){
 
 
 
+function wrap(el, wrapper) {
+  el.parentNode.insertBefore(wrapper, el);
+  wrapper.appendChild(el);
+}
+
 /* global window */
 if (!window.website) {
-  const animationLoop = new AppAnimationLoop();
-  animationLoop.start();
+  let stats = new Stats();
+  const animationLoop = new AppAnimationLoop({fpsMeter:stats});
+  stats.showPanel( 0 ); // 0: fps, 1: ms, 2: mb, 3+: custom
+
+  let fs = document.getElementById('fs-container');
+ //wrap(document.getElementById('lumagl-canvas'), fs);
+  stats.dom.setAttribute("id", "fps-meter");
+  fs.appendChild( stats.dom );
+  stats.dom.style.position="absolute";
+  animationLoop.start({canvas: 'lumagl-canvas'});
 }
