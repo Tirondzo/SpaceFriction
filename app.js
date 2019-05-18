@@ -10,6 +10,7 @@ import { Program, FragmentShader, VertexShader } from '@luma.gl/webgl';
 import { VERTEX_SHADER, FRAGMENT_SHADER, SHADOWMAP_VERTEX, SHADOWMAP_FRAGMENT, 
   PBR_VS_WITH_SHADOWMAP, PBR_FS_WITH_SHADOWMAP } from './shaders';
 import { SpaceSkybox, generateSimpleCubemap } from './spaceSkybox';
+import * as KeyCode from 'keycode-js';
 
 const INFO_HTML = `
 <p>
@@ -19,6 +20,19 @@ const INFO_HTML = `
 <p>
 The classic WebGL Lessons in luma.gl
 `;
+
+const CONTROLS = {
+  MOVE_FWD: KeyCode.KEY_W,
+  MOVE_LEFT: KeyCode.KEY_A,
+  MOVE_BACK: KeyCode.KEY_S,
+  MOVE_RIGHT: KeyCode.KEY_D,
+  ROLL_LEFT: KeyCode.KEY_Q,
+  ROLL_RIGHT: KeyCode.KEY_E,
+  MOVE_DOWN: KeyCode.KEY_C,
+  MOVE_UP: KeyCode.KEY_Z,
+  TARGET_VIEW: KeyCode.KEY_V,
+  TARGET_LIGHT: KeyCode.KEY_L
+}
 
 Matrix4.prototype.removeTranslate = function(){
   let m = this;
@@ -115,9 +129,8 @@ class ColoredCubeGeometry extends CubeGeometry {
 }
 
 class Camera{
-  constructor(pos, ang, wfront=new Vector3(0,0,-1), wup=new Vector3(0,1,0)){
+  constructor(pos, wfront=new Vector3(0,0,-1), wup=new Vector3(0,1,0)){
     this.pos = pos;
-    this.ang = ang;
     this.front = new Vector3();
     this.right = new Vector3();
     this.up = new Vector3();
@@ -128,11 +141,12 @@ class Camera{
   }
   updateVectors(transpose=true){
     //YXZ Is nice solution when camera pitch is limited
-    this.viewMatrix = new Matrix4().rotateY(this.ang[1]).rotateX(this.ang[0]).rotateZ(this.ang[2]);
+    //this.viewMatrix = new Matrix4().rotateY(this.ang[1]).rotateX(this.ang[0]).rotateZ(this.ang[2]);
 
-    this.front = this.viewMatrix.transformDirection(this.wfront);
-    this.up = this.viewMatrix.transformDirection(this.wup);
-    this.right = this.front.clone().cross(this.up).normalize();
+    this.front.copy(this.wfront);
+    this.up.copy(this.wup);
+    this.right.copy(this.front);
+    this.right = this.right.cross(this.up);
     //this.viewMatrix = new Matrix4().lookAt({eye:[0,0,0],center:this.front,up:this.up});
     this.viewMatrix.setColumnMajor(this.right[0],this.right[1],this.right[2],0,
                                   this.up[0],this.up[1],this.up[2],0,
@@ -141,10 +155,22 @@ class Camera{
     if(!transpose) this.viewMatrix = new Matrix4().translate(this.pos).multiplyRight(this.viewMatrix);
     else this.viewMatrix.transpose().translate(this.pos);
   }
-  updateCamera(dpos=new Vector3(0), dang=new Vector3(0)){
+  updateCamera(dpos=new Vector3(0), dang=new Vector3(0), transpose=true){
     this.pos.add(dpos);
-    this.ang.add(dang);
-    this.updateVectors();
+    let quat = new Quaternion().setAxisAngle(this.up, dang[0])
+      .multiply(new Quaternion().setAxisAngle(this.right, dang[1]))
+      .multiply(new Quaternion().setAxisAngle(this.front, dang[2]));
+    let u = new Vector3(quat);
+    let s = quat.w; let ss = quat.w*quat.w;
+    let uv = u.dot(this.wfront);
+    let uu = u.dot(u);
+    let cuv = u.clone().cross(this.wfront);
+    this.wfront = this.wfront.scale(ss - uu).add(u.clone().scale(2*uv)).add(cuv.scale(2*s));
+    uv = u.dot(this.wup);
+    cuv = u.clone().cross(this.wup);
+    this.wup = this.wup.scale(ss - uu).add(u.clone().scale(2*uv)).add(cuv.scale(2*s));
+
+    this.updateVectors(transpose);
   }
 }
 
@@ -186,8 +212,8 @@ export default class AppAnimationLoop extends AnimationLoop {
     });
   }
   onInitialize({canvas, gl}) {
-    this.camera = new Camera(new Vector3(), new Vector3());
-    this.ship = new Camera(new Vector3(), new Vector3());
+    this.camera = new Camera(new Vector3());
+    this.ship = new Camera(new Vector3());
     this.loadOptions = {
       pbrDebug: true,
       imageBasedLightingEnvironment: null,
@@ -272,7 +298,11 @@ export default class AppAnimationLoop extends AnimationLoop {
   onRender({gl, tick, aspect, pyramid, cube, skybox, fbShadow, canvas}) {
     gl.clear(GL.COLOR_BUFFER_BIT | GL.DEPTH_BUFFER_BIT);
 
-    updateCamera(this.camera, this.ship);
+    this.lastTick = this.lastTick ? this.lastTick : tick;
+    const deltaTick = (tick - this.lastTick);
+    this.lastTick = tick;
+
+    updateCamera(this.camera, this.ship, deltaTick);
 
     const projection = new Matrix4().perspective({aspect});
     let ship_view_trans = this.ship.viewMatrix.clone();
@@ -463,7 +493,7 @@ function addPointerHandler(canvas, camera) {
   let currentX = 0;
   let currentY = 0;
   let moveCallback = function(e){
-    camera.updateCamera(new Vector3(), new Vector3(-e.movementY,-e.movementX).scale(0.001));
+    camera.updateCamera(new Vector3(), new Vector3(-e.movementX,-e.movementY).scale(0.001));
   }
 
   document.addEventListener('pointerlockchange', function(e){
@@ -496,49 +526,53 @@ function addPointerHandler(canvas, camera) {
   }
 }
 
-function updateCamera(camera, ship){
+function updateCamera(camera, ship, tick){
   let dpos = new Vector3(0);
   let kdpos = new Vector3(0);
-  if (currentlyPressedKeys[37] || currentlyPressedKeys[65]) {
-    // Left cursor key or A
+  let roll = 0;
+  let k = tick*.1;
+  if (currentlyPressedKeys[CONTROLS.MOVE_LEFT]) {
     dpos.subtract(camera.right);
     kdpos.subtract([1,0,0]);
-  } else if (currentlyPressedKeys[39] || currentlyPressedKeys[68]) {
-    // Right cursor key or D
+  } else if (currentlyPressedKeys[CONTROLS.MOVE_RIGHT]) {
     dpos.add(camera.right);
     kdpos.add([1,0,0]);
   }
-  if (currentlyPressedKeys[38] || currentlyPressedKeys[87]) {
-    // Up cursor key or W
+  if (currentlyPressedKeys[CONTROLS.MOVE_FWD]) {
     dpos.add(camera.front);
     kdpos.add([0,0,-1]);
-  } else if (currentlyPressedKeys[40] || currentlyPressedKeys[83]) {
-    // Down cursor key or S
+  } else if (currentlyPressedKeys[CONTROLS.MOVE_BACK]) {
     dpos.subtract(camera.front);
     kdpos.subtract([0,0,-1]);
   }
-  if (currentlyPressedKeys[81]) {
-    // Q
-    dpos.subtract(camera.up);
-    kdpos.subtract([0,1,0]);
-  }else if (currentlyPressedKeys[69]) {
+  if (currentlyPressedKeys[CONTROLS.MOVE_UP]) {
     dpos.add(camera.up);
     kdpos.add([0,1,0]);
+  }else if (currentlyPressedKeys[CONTROLS.MOVE_DOWN]) {
+    dpos.subtract(camera.up);
+    kdpos.subtract([0,1,0]);
+  }
+  if (currentlyPressedKeys[CONTROLS.ROLL_LEFT]) {
+    roll -= .25;
+  }else if (currentlyPressedKeys[CONTROLS.ROLL_RIGHT]) {
+    roll += .25;
   }
 
-  dpos.scale(.1);
   if(!triggers.freeCamera){
     //let rotateMat = new Matrix4().rotateAxis(kdpos[1]*.1,ship.right.clone().negate()).rotateAxis(kdpos[0]*-.1,ship.up.clone().negate()).clone();
-    let rotateMat = new Matrix4().fromQuaternion(new Quaternion().setAxisAngle(ship.up, kdpos[0]*-.1).multiply(new Quaternion().setAxisAngle(ship.right, kdpos[1]*.1)));
+    /*let rotateMat = new Matrix4().fromQuaternion(new Quaternion().setAxisAngle(ship.up, kdpos[0]*-.1).multiply(new Quaternion().setAxisAngle(ship.right, kdpos[1]*.1)));
     ship.pos.add(ship.front.clone().scale(kdpos[2]*.1));
     ship.wup = rotateMat.transformDirection(ship.wup.clone(), new Vector3());
     ship.wfront = rotateMat.transformDirection(ship.wfront.clone(), new Vector3());
-    ship.updateVectors(false);
+    ship.updateVectors(false);*/
+
+    k *= .5;
+    ship.updateCamera(ship.front.clone().scale(kdpos[2]*k), new Vector3(kdpos[0]*k,kdpos[1]*k,roll*k), false);
    // ship.viewMatrix.translate(SHIP_DELTA).multiplyRight(rotateMat).translate(SHIP_DELTA.clone().negate());
   }
   //if(dpos.dot(new Vector3())!==0)
   if(triggers.freeCamera)
-    camera.updateCamera(dpos.negate(), new Vector3(0));
+    camera.updateCamera(dpos.negate().scale(k), new Vector3(0,0,roll*k));
 }
 
 

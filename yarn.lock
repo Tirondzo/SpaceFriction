@@ -2472,6 +2472,11 @@ jsprim@^1.2.2:
     json-schema "0.2.3"
     verror "1.10.0"
 
+keycode-js@^1.0.4:
+  version "1.0.4"
+  resolved "https://registry.yarnpkg.com/keycode-js/-/keycode-js-1.0.4.tgz#3c56ce1363169291fa6fcc255190a87e81fa6667"
+  integrity sha512-kGZKTIlTtbZSb8NyBDb7xU/LlZf+bsHiAjb595M3flVPbSUCknGK/w2KXs8r9sVCcwwafQcrAGWDt7d38ajemw==
+
 killable@^1.0.1:
   version "1.0.1"
   resolved "https://registry.yarnpkg.com/killable/-/killable-1.0.1.tgz#4c8ce441187a061c7474fb87ca08e2a638194892"
