@@ -44,6 +44,23 @@ Matrix4.prototype.removeTranslate = function(){
   m[3]=m[7]=m[11]=m[12]=m[13]=m[14]=0;
   return m;
 }
+Matrix4.prototype.invertTransform = function(){
+  //http://graphics.stanford.edu/courses/cs248-98-fall/Final/q4.html
+  //1. The inverse of a translation matrix is the translation matrix with the opposite signs on each of the translation components.
+  //2. The inverse of a rotation matrix is the rotation matrix's transpose.
+  //3. The inverse of a matrix product is the product of the inverse matrices ordered in reverse.
+  let m = this;
+  let pos = new Vector3(m[12],m[13],m[14]);
+  m[12]=m[13]=m[14]=0;
+  let u = new Vector3(m[0],m[1],m[2]);
+  let v = new Vector3(m[4],m[5],m[6]);
+  let w = new Vector3(m[8],m[9],m[10]);
+  m.transpose();
+  m[12]=-u.dot(pos);
+  m[13]=-v.dot(pos);
+  m[14]=-w.dot(pos);
+  return m;
+}
 
 // Makes a colored pyramid
 class ColoredPyramidGeometry extends Geometry {
@@ -322,12 +339,16 @@ export default class AppAnimationLoop extends AnimationLoop {
       const vmat = new Matrix4().translate(SHIP_DELTA).multiplyRight(this.camera.viewMatrix.clone().removeTranslate());
       view.multiplyLeft(vmat);
       view.translate(this.ship.pos.clone().negate());
-      view_pos = this.ship.pos;
+      let view_inv = view.clone().invertTransform();
+      this.camera.pos.x = -view_inv[12];
+      this.camera.pos.y = -view_inv[13];
+      this.camera.pos.z = -view_inv[14];
+      view_pos = this.camera.pos;
     }
     if(triggers.backToFreeCam){
       triggers.backToFreeCam = false;
 
-      view.invert();
+      view.invertTransform();
       this.camera.pos = new Vector3(view[12], view[13], view[14]).negate();
       this.camera.wup = new Vector3(view[4], view[5], view[6]);
       this.camera.wfront = new Vector3(-view[8], -view[9], -view[10]);
@@ -336,10 +357,10 @@ export default class AppAnimationLoop extends AnimationLoop {
       view = this.camera.viewMatrix;
     }
 
-    const engineLightDelta = [0,-0.28,-6.7];
+    const engineLightDelta = [0,0.28,6.7];
     this.engineLight = this.ship.viewMatrix.transformDirection(engineLightDelta);
-    this.engineView = this.ship.viewMatrix.clone().removeTranslate().translate(this.engineLight);
-    this.engineLight.negate();
+    this.engineView = this.ship.viewMatrix.clone().transpose().translate(this.engineLight.clone().negate());
+    //this.engineLight.add(this.ship.pos);
     const shadowProj = new Matrix4().ortho({
       left: -4,
       right: 4,
@@ -348,6 +369,9 @@ export default class AppAnimationLoop extends AnimationLoop {
       near: 0,
       far: 64
     });
+
+    //if(triggers.freeCamera)
+    //view = this.engineView;
 
     gl.viewport(0,0,fbShadow.width,fbShadow.height);
     clear(gl, {framebuffer: fbShadow, color: [1, 1, 1, 1], depth: true});
@@ -397,7 +421,7 @@ export default class AppAnimationLoop extends AnimationLoop {
     .draw();
 
     if(triggers.debugBasis)
-    for(const vec of [this.ship.front,this.ship.up,this.ship.right]){
+    for(const vec of [this.ship.front,this.ship.up,this.ship.right, this.engineLight]){
       cube
       .setUniforms({
         uPMatrix: projection,
@@ -432,17 +456,17 @@ export default class AppAnimationLoop extends AnimationLoop {
           intensity: 1.0
         }
       }});
-      //const u_MSVSPMatirx = new Matrix4(shadowProj).multiplyRight(this.engineView).multiplyRight(ship_view_trans);
-      //const u_MVPMatrix = new Matrix4(projection).multiplyRight(view).multiplyRight(ship_view_trans);
+      const u_MSVSPMatirx = new Matrix4(shadowProj).multiplyRight(this.engineView).multiplyRight(this.ship.viewMatrix).multiplyRight(worldMatrix);
+      const u_MVPMatrix = new Matrix4(projection).multiplyRight(view).multiplyRight(this.ship.viewMatrix).multiplyRight(worldMatrix);
       let old_program = model.model.program;
       if(model.id === "Cube.021_0-primitive-0") model.model.program = this.pbrShadowProgram;
       this.pbrShadowProgram.setUniforms(old_program.uniforms);
-      /*model.setUniforms({
+      model.setUniforms({
         u_Camera: view_pos,
         u_MVPMatrix, u_MSVSPMatirx,
         u_ShadowMap: fbShadow,
-        u_ModelMatrix: this.ship.viewMatrix.clone().transpose(),
-        u_NormalMatrix: ship_view_trans.clone().removeTranslate().invert().transpose(),
+        u_ModelMatrix: this.ship.viewMatrix.clone().removeTranslate(),
+        u_NormalMatrix: this.ship.viewMatrix.clone().invertTransform(),
         u_SpecularEnvSampler: skybox.rttCubemap,
         u_ScaleIBLAmbient: [1, 5]
       }).draw({
@@ -451,7 +475,7 @@ export default class AppAnimationLoop extends AnimationLoop {
         vertexArray: model.model.vertexArray,
         isIndexed: true,
         indexType: model.model.indexType
-      });*/
+      });
       model.model.program = old_program;
     });
 
