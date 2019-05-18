@@ -33,7 +33,8 @@ const CONTROLS = {
   RESET_CAMERA: KeyCode.KEY_X,
   TARGET_VIEW: KeyCode.KEY_V,
   TARGET_LIGHT: KeyCode.KEY_L,
-  DEBUG_BASIS: KeyCode.KEY_P
+  DEBUG_BASIS: KeyCode.KEY_P,
+  MOVE_FAST: KeyCode.KEY_SHIFT
 }
 
 Matrix4.prototype.removeTranslate = function(){
@@ -328,11 +329,23 @@ export default class AppAnimationLoop extends AnimationLoop {
     ship_view_trans.translate(this.ship.pos.clone().negate());*/
     let view_pos = this.camera.pos;
     let view = this.camera.viewMatrix;
-    if(!triggers.freeCamera){
+    if(!triggers.freeCamera || triggers.backToFreeCam){
       view = this.ship.viewMatrix.clone().removeTranslate().transpose();
       const vmat = new Matrix4().translate(SHIP_DELTA).multiplyRight(this.camera.viewMatrix.clone().removeTranslate());
       view.multiplyLeft(vmat);
       view.translate(this.ship.pos.clone().negate());
+      view_pos = this.ship.pos;
+    }
+    if(triggers.backToFreeCam){
+      triggers.backToFreeCam = false;
+
+      view.invert();
+      this.camera.pos = new Vector3(view[12], view[13], view[14]).negate();
+      this.camera.wup = new Vector3(view[4], view[5], view[6]);
+      this.camera.wfront = new Vector3(-view[8], -view[9], -view[10]);
+      
+      this.camera.updateVectors();
+      view = this.camera.viewMatrix;
     }
 
     const engineLightDelta = [0,-0.28,-6.7];
@@ -477,6 +490,8 @@ function addKeyboardHandler(canvas) {
       if(e.code === CONTROLS.TARGET_LIGHT) triggers.cameraLight = !triggers.cameraLight;
       if(e.code === CONTROLS.TARGET_VIEW) triggers.freeCamera = !triggers.freeCamera;
       if(e.code === CONTROLS.DEBUG_BASIS) triggers.debugBasis = !triggers.debugBasis;
+
+      if(e.code === CONTROLS.TARGET_VIEW && triggers.freeCamera) triggers.backToFreeCam = true;
     }
   });
 }
@@ -552,12 +567,14 @@ function updateCamera(camera, ship, tick){
   }
   if (currentlyPressedKeys[CONTROLS.RESET_CAMERA]){
     camera.applyQuaternion(new Quaternion().slerp({target: new Quaternion().rotationTo(camera.up, [0,1,0]), ratio: Math.min(1.0, k)}));
+    camera.updateVectors();
   }
+
+  if (currentlyPressedKeys[CONTROLS.MOVE_FAST]) k *= 3;
 
   if(!triggers.freeCamera){
     k *= .5;
     ship.updateCamera(ship.front.clone().scale(-kdpos[2]*k), new Vector3(-kdpos[0]*k*.25,kdpos[1]*k*.25,roll*k), false);
-    camera.updateVectors();
   }
   if(triggers.freeCamera)
     camera.updateCamera(dpos.negate().scale(k), new Vector3(0,0,roll*k));
