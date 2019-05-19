@@ -58,7 +58,7 @@ export const SHADOWMAP_FRAGMENT = `#version 300 es
 precision highp float;
 out vec4 fragColor;
 void main(void) {
-  fragColor = vec4(vec3(gl_FragCoord.z),1.0);
+  fragColor = vec4(gl_FragCoord.z,0,0,1);
 }
 `;
 
@@ -687,7 +687,7 @@ vec4 pbr_filterColor(vec4 colorUnused)
       float attenuation = getPointLightAttenuation(lighting_uPointLight[i], distance(lighting_uPointLight[i].position, pbr_vPosition));
       //out_shadow = shadowCoord.z;
       out_shadow = 1.0;
-      if(i == 0 && (texture(u_ShadowMap, shadowCoord.xy).z < shadowCoord.z - 0.005)) out_shadow = 0.0;
+      if(i == 0 && (texture(u_ShadowMap, shadowCoord.xy).r < shadowCoord.z - 0.005)) out_shadow = 0.0;
       color += calculateFinalColor(pbrInputs, lighting_uPointLight[i].color / attenuation)*out_shadow;
     }
   }
@@ -706,11 +706,6 @@ vec4 pbr_filterColor(vec4 colorUnused)
 #endif
 
 #ifdef PBR_DEBUG
-
-
-
-
-
   color = mix(color, baseColor.rgb, u_ScaleDiffBaseMR.y);
   color = mix(color, vec3(metallic), u_ScaleDiffBaseMR.z);
   color = mix(color, vec3(perceptualRoughness), u_ScaleDiffBaseMR.w);

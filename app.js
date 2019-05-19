@@ -1,6 +1,6 @@
 import GL from '@luma.gl/constants';
 import {AnimationLoop, Model, Geometry, CubeGeometry, setParameters, log, 
-  Texture2D, TextureCube, loadImage, Framebuffer, clear} from '@luma.gl/core';
+  Texture2D, TextureCube, loadImage, Framebuffer, Renderbuffer, clear} from '@luma.gl/core';
 import {Matrix4, Vector3, Vector4, Quaternion} from 'math.gl';
 import {parse} from '@loaders.gl/core';
 // eslint-disable-next-line import/no-unresolved
@@ -37,6 +37,12 @@ const CONTROLS = {
   DEBUG_BASIS: KeyCode.KEY_P,
   MOVE_FAST: KeyCode.KEY_SHIFT,
   FPS_COUNTER: KeyCode.KEY_F
+}
+
+const SETTINGS = {
+  SKYBOX_RES: 1024,
+  SHADOWMAP_RES: 1024,
+  SHIP_DELTA: new Vector3([0,0,-15])
 }
 
 Matrix4.prototype.removeTranslate = function(){
@@ -220,7 +226,6 @@ async function loadGLTF(url, gl, options) {
   return {scenes, animator, gltf};
 }
 
-const SHIP_DELTA = new Vector3([0,0,-15]);
 export default class AppAnimationLoop extends AnimationLoop {
   // .context(() => createGLContext({canvas: 'lesson04-canvas'}))
   static getInfo() {
@@ -255,8 +260,7 @@ export default class AppAnimationLoop extends AnimationLoop {
       depthFunc: GL.LEQUAL
     });
 
-    const SKYBOX_RES = 1024;
-    let skybox = new SpaceSkybox(gl, {}, SKYBOX_RES);
+    let skybox = new SpaceSkybox(gl, {}, SETTINGS.SKYBOX_RES);
 
     //make environment
     this.BrdfTexture = new Texture2D(this.gl, {
@@ -306,7 +310,37 @@ export default class AppAnimationLoop extends AnimationLoop {
       Object.assign(this, result)
     );
     
-    this.test = true;
+    
+    this.shadowTxt2D = new Texture2D(gl, {
+      data: null,
+      format: GL.DEPTH_COMPONENT16,
+      type: GL.UNSIGNED_SHORT,
+      mipmaps: false,
+      border: 0,
+      parameters: {
+        [GL.TEXTURE_MAG_FILTER]: GL.LINEAR,
+        [GL.TEXTURE_MIN_FILTER]: GL.LINEAR,
+        [GL.TEXTURE_WRAP_S]: GL.CLAMP_TO_EDGE,
+        [GL.TEXTURE_WRAP_T]: GL.CLAMP_TO_EDGE,
+        [GL.TEXTURE_COMPARE_MODE]: GL.COMPARE_REF_TO_TEXTURE
+      },
+      width: SETTINGS.SHADOWMAP_RES,
+      height: SETTINGS.SHADOWMAP_RES,
+      dataFormat: GL.DEPTH_COMPONENT
+    });
+    this.fbShadow = new Framebuffer(gl, {
+      id: 'shadowmap', 
+      width: SETTINGS.SHADOWMAP_RES, 
+      height:SETTINGS.SHADOWMAP_RES,
+      attachments: {
+        [GL.DEPTH_ATTACHMENT]: this.shadowTxt2D
+      }
+    });
+    this.fbShadow.gl.drawBuffers([GL.DEPTH_ATTACHMENT]);
+    /*this.fbShadow.attach({
+      [GL.DEPTH_ATTACHMENT]: this.shadowTxt2D
+    }, {resizeAttachments: false});*/
+
     return {
       pyramid: new Model(gl, {
         vs: VERTEX_SHADER,
@@ -318,7 +352,7 @@ export default class AppAnimationLoop extends AnimationLoop {
         fs: FRAGMENT_SHADER,
         geometry: new ColoredCubeGeometry()
       }),
-      fbShadow: new Framebuffer(gl, {id: 'shadowmap', width: 1024, height: 1024}),
+      fbShadow: this.fbShadow,
       skybox: skybox
     };
   }
@@ -337,7 +371,7 @@ export default class AppAnimationLoop extends AnimationLoop {
     let view = this.camera.viewMatrix;
     if(!triggers.freeCamera || triggers.backToFreeCam){
       view = this.ship.viewMatrix.clone().removeTranslate().transpose();
-      const vmat = new Matrix4().translate(SHIP_DELTA).multiplyRight(this.camera.viewMatrix.clone().removeTranslate());
+      const vmat = new Matrix4().translate(SETTINGS.SHIP_DELTA).multiplyRight(this.camera.viewMatrix.clone().removeTranslate());
       view.multiplyLeft(vmat);
       view.translate(this.ship.pos.clone().negate());
       let view_inv = view.clone().invertTransform();
@@ -472,9 +506,9 @@ export default class AppAnimationLoop extends AnimationLoop {
       model.setUniforms({
         u_Camera: view_pos,
         u_MVPMatrix, u_MSVSPMatirx,
-        u_ShadowMap: fbShadow,
+        u_ShadowMap: this.shadowTxt2D,
         u_ModelMatrix: this.ship.viewMatrix.clone().multiplyRight(worldMatrix),
-        u_NormalMatrix: new Matrix4(this.ship.viewMatrix).multiplyRight(worldMatrix).invert().transpose(),
+        u_NormalMatrix: new Matrix4(this.ship.viewMatrix).multiplyRight(worldMatrix),
         u_SpecularEnvSampler: skybox.rttCubemap,
         u_ScaleIBLAmbient: [1, 5]
       }).draw({
