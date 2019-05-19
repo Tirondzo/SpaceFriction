@@ -175,9 +175,10 @@ class Camera{
                                   -this.front[0],-this.front[1],-this.front[2],0,
                                   0,0,0,1);
     if(!transpose) this.viewMatrix = new Matrix4().translate(this.pos).multiplyRight(this.viewMatrix);
-    else this.viewMatrix.transpose().translate(this.pos);
+    else this.viewMatrix.transpose().translate(this.pos.clone().negate());
   }
   updateCamera(dpos=new Vector3(0), dang=new Vector3(0), transpose=true){
+    if(transpose) dpos.negate();
     this.pos.add(dpos);
     let quat = new Quaternion().setAxisAngle(this.up, dang[0])
       .multiply(new Quaternion().setAxisAngle(this.right, dang[1]))
@@ -340,16 +341,16 @@ export default class AppAnimationLoop extends AnimationLoop {
       view.multiplyLeft(vmat);
       view.translate(this.ship.pos.clone().negate());
       let view_inv = view.clone().invertTransform();
-      this.camera.pos.x = -view_inv[12];
-      this.camera.pos.y = -view_inv[13];
-      this.camera.pos.z = -view_inv[14];
+      this.camera.pos.x = view_inv[12];
+      this.camera.pos.y = view_inv[13];
+      this.camera.pos.z = view_inv[14];
       view_pos = this.camera.pos;
     }
     if(triggers.backToFreeCam){
       triggers.backToFreeCam = false;
 
       view.invertTransform();
-      this.camera.pos = new Vector3(view[12], view[13], view[14]).negate();
+      this.camera.pos = new Vector3(view[12], view[13], view[14]);
       this.camera.wup = new Vector3(view[4], view[5], view[6]);
       this.camera.wfront = new Vector3(-view[8], -view[9], -view[10]);
       
@@ -358,9 +359,10 @@ export default class AppAnimationLoop extends AnimationLoop {
     }
 
     const engineLightDelta = [0,0.28,6.7];
-    this.engineLight = this.ship.viewMatrix.transformDirection(engineLightDelta);
-    this.engineView = this.ship.viewMatrix.clone().transpose().translate(this.engineLight.clone().negate());
-    //this.engineLight.add(this.ship.pos);
+    this.engineView = this.ship.viewMatrix.clone().translate(engineLightDelta);
+    this.engineLight = new Vector3(this.engineView[12], this.engineView[13], this.engineView[14]);
+    this.engineView.invertTransform();
+    //this.engineLight.negate().add(this.ship.pos);
     const shadowProj = new Matrix4().ortho({
       left: -4,
       right: 4,
@@ -371,7 +373,7 @@ export default class AppAnimationLoop extends AnimationLoop {
     });
 
     //if(triggers.freeCamera)
-    //view = this.engineView;
+    //  view = this.engineView;
 
     gl.viewport(0,0,fbShadow.width,fbShadow.height);
     clear(gl, {framebuffer: fbShadow, color: [1, 1, 1, 1], depth: true});
@@ -421,7 +423,7 @@ export default class AppAnimationLoop extends AnimationLoop {
     .draw();
 
     if(triggers.debugBasis)
-    for(const vec of [this.ship.front,this.ship.up,this.ship.right, this.engineLight]){
+    for(const vec of [this.ship.front,this.ship.up,this.ship.right]){
       cube
       .setUniforms({
         uPMatrix: projection,
@@ -430,6 +432,12 @@ export default class AppAnimationLoop extends AnimationLoop {
         .clone()
       }).draw();
     }
+    if(triggers.debugBasis)
+    pyramid
+    .setUniforms({
+      uPMatrix: projection,
+      uMVMatrix: view.clone().multiplyRight(new Matrix4().translate(this.engineLight)).scale(.3)
+    }).draw();
 
     let success = true;
     if (this.scenes !== undefined)
@@ -465,8 +473,8 @@ export default class AppAnimationLoop extends AnimationLoop {
         u_Camera: view_pos,
         u_MVPMatrix, u_MSVSPMatirx,
         u_ShadowMap: fbShadow,
-        u_ModelMatrix: this.ship.viewMatrix.clone().removeTranslate(),
-        u_NormalMatrix: this.ship.viewMatrix.clone().invertTransform(),
+        u_ModelMatrix: this.ship.viewMatrix.clone().multiplyRight(worldMatrix),
+        u_NormalMatrix: new Matrix4(this.ship.viewMatrix).multiplyRight(worldMatrix).invert().transpose(),
         u_SpecularEnvSampler: skybox.rttCubemap,
         u_ScaleIBLAmbient: [1, 5]
       }).draw({
