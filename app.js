@@ -14,12 +14,7 @@ import * as KeyCode from 'keycode-js';
 import * as Stats from 'stats.js';
 
 const INFO_HTML = `
-<p>
-  <a href="http://learningwebgl.com/blog/?p=370" target="_blank">
-    Some Real 3D Objects
-  </a>
-<p>
-The classic WebGL Lessons in luma.gl
+Space demo by A.Sobolev
 `;
 
 const CONTROLS = {
@@ -274,7 +269,7 @@ export default class AppAnimationLoop extends AnimationLoop {
         [this.gl.UNPACK_FLIP_Y_WEBGL]: false
       },
       // Texture2D accepts a promise that returns an image as data (Async Textures)
-      data: loadImage('/resources/brdfLUT.png')
+      data: loadImage('./resources/brdfLUT.png')
     });
     this.DiffuseEnvSampler = generateSimpleCubemap(gl, 16, [127,127,255]);
     this.SpecularEnvSampler = skybox.rttCubemap;
@@ -297,7 +292,7 @@ export default class AppAnimationLoop extends AnimationLoop {
     this.pbrShadowProgram = new Program(gl, {vs: PBR_VS_WITH_SHADOWMAP, fs:PBR_FS_WITH_SHADOWMAP});
     this.pbrProgram = new Program(gl, {vs: PBR_VS_WITH_SHADOWMAP, fs:PBR_FS});
     this.loadOptions.pbrShadowProgram = this.pbrShadowProgram;
-    loadGLTF("/resources/45-e/scene.gltf", this.gl, this.loadOptions).then(result =>
+    loadGLTF("./resources/45-e/scene.gltf", this.gl, this.loadOptions).then(result =>
       Object.assign(this, result)
     );
     

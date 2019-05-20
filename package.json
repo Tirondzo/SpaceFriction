@@ -10,6 +10,7 @@
     "@luma.gl/addons": "^7.0.1",
     "@luma.gl/constants": "^7.0.1",
     "@luma.gl/core": "^7.0.1",
+    "copy-webpack-plugin": "^5.0.3",
     "keycode-js": "^1.0.4",
     "math.gl": "^2.3.1",
     "stats.js": "^0.17.0"
