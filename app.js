@@ -176,7 +176,7 @@ class Camera{
     this.up.copy(this.wup);
     this.right.copy(this.front);
     this.right = this.right.cross(this.up);
-    //this.viewMatrix = new Matrix4().lookAt({eye:[0,0,0],center:this.front,up:this.up});
+    //Create matrix by basis
     this.viewMatrix.setColumnMajor(this.right[0],this.right[1],this.right[2],0,
                                   this.up[0],this.up[1],this.up[2],0,
                                   -this.front[0],-this.front[1],-this.front[2],0,
@@ -220,15 +220,11 @@ async function loadGLTF(url, gl, options) {
     if (options.pbrShadowProgram){
       options.pbrShadowProgram.setUniforms(node.model.program.uniforms);
     }
-    //node.model.props.defines["USE_TEX_LOD"] = 0;
-    //node.model.program = node.model._createProgram(node.props);
-    //node.model.program.fs = new FragmentShader(gl, node.model.program.fs.source.replace("USE_TEX_LOD 1", "USE_TEX_LOD 0"));
   });
   return {scenes, animator, gltf};
 }
 
 export default class AppAnimationLoop extends AnimationLoop {
-  // .context(() => createGLContext({canvas: 'lesson04-canvas'}))
   static getInfo() {
     return INFO_HTML;
   }
@@ -236,7 +232,7 @@ export default class AppAnimationLoop extends AnimationLoop {
     super({
       ...opts,
       glOptions: {
-        // alpha causes issues with some glTF demos
+        // alpha causes issues with some glTF
         webgl1: false,
         webgl2: true,
         alpha: false
@@ -282,12 +278,11 @@ export default class AppAnimationLoop extends AnimationLoop {
     });
     this.DiffuseEnvSampler = generateSimpleCubemap(gl, 16, [127,127,255]);
     this.SpecularEnvSampler = skybox.rttCubemap;
-    let environment = {
+    this.environment = {
       getDiffuseEnvSampler: x=>this.DiffuseEnvSampler,
       getSpecularEnvSampler: x=>this.SpecularEnvSampler,
       getBrdfTexture: x=>this.BrdfTexture
     }
-    this.loadOptions.imageBasedLightingEnvironment = environment;
 
     const CUBE_FACE_TO_DIRECTION = {
       [GL.TEXTURE_CUBE_MAP_POSITIVE_X]: 'right',
@@ -297,14 +292,6 @@ export default class AppAnimationLoop extends AnimationLoop {
       [GL.TEXTURE_CUBE_MAP_POSITIVE_Z]: 'front',
       [GL.TEXTURE_CUBE_MAP_NEGATIVE_Z]: 'back'
     };
-    const SITE_LINK = 'https://raw.githubusercontent.com/uber-common/deck.gl-data/master/luma.gl/examples/gltf/';
-    this.environment = new GLTFEnvironment(gl, {
-      brdfLutUrl: `${SITE_LINK}/brdfLUT.png`,
-      getTexUrl: (type, dir, mipLevel) =>
-        `${SITE_LINK}/papermill/${type}/${type}_${CUBE_FACE_TO_DIRECTION[dir]}_${mipLevel}.jpg`
-    });
-    //this.environment._SpecularEnvSampler = skybox.rttCubemap;
-    //this.environment._DiffuseEnvSampler = this.DiffuseEnvSampler;
     this.loadOptions.imageBasedLightingEnvironment = this.environment;
     this.shadowProgram = new Program(gl, {vs: SHADOWMAP_VERTEX, fs:SHADOWMAP_FRAGMENT});
     this.pbrShadowProgram = new Program(gl, {vs: PBR_VS_WITH_SHADOWMAP, fs:PBR_FS_WITH_SHADOWMAP});
@@ -341,9 +328,6 @@ export default class AppAnimationLoop extends AnimationLoop {
       }
     });
     this.fbShadow.gl.drawBuffers([GL.BACK]);
-    /*this.fbShadow.attach({
-      [GL.DEPTH_ATTACHMENT]: this.shadowTxt2D
-    }, {resizeAttachments: false});*/
 
     return {
       pyramid: new Model(gl, {
@@ -403,7 +387,6 @@ export default class AppAnimationLoop extends AnimationLoop {
     this.engineView = this.ship.viewMatrix.clone().translate(engineLightDelta);
     this.engineLight = new Vector3(this.engineView[12], this.engineView[13], this.engineView[14]);
     this.engineView.invertTransform();
-    //this.engineLight.negate().add(this.ship.pos);
     const shadowProj = new Matrix4().ortho({
       left: -4,
       right: 4,
@@ -412,9 +395,6 @@ export default class AppAnimationLoop extends AnimationLoop {
       near: 0,
       far: 64
     });
-
-    //if(triggers.freeCamera)
-    //  view = this.engineView;
 
     gl.viewport(0,0,fbShadow.width,fbShadow.height);
     clear(gl, {framebuffer: fbShadow, color: [1, 1, 1, 1], depth: true});
@@ -442,46 +422,42 @@ export default class AppAnimationLoop extends AnimationLoop {
     });
     gl.viewport(0,0,canvas.width,canvas.height);
 
-    pyramid
-    .setUniforms({
-      uPMatrix: projection,
-      uMVMatrix: view
-      .clone()
-      .translate([-1.5, 0, -8])
-      .rotateY(tick * 0.01)
-    })
-    .draw();
-
-    const phi = tick * 0.01;
-    cube
-    .setUniforms({
-      uPMatrix: projection,
-      uMVMatrix: view
-      .clone()
-      .translate([1.5, 0, -8])
-      .rotateXYZ([phi, phi, phi])
-    })
-    .draw();
-
-    if(triggers.debugBasis)
-    for(const vec of [this.ship.front,this.ship.up,this.ship.right]){
+    if(triggers.debugObjects){
+      pyramid
+      .setUniforms({
+        uPMatrix: projection,
+        uMVMatrix: view
+        .clone()
+        .translate([-1.5, 0, -8])
+        .rotateY(tick * 0.01)
+      }).draw();
+      const phi = tick * 0.01;
       cube
       .setUniforms({
         uPMatrix: projection,
-        uMVMatrix: view.clone().multiplyRight(new Matrix4().translate(vec.clone().scale(3)))
-                                .multiplyRight(this.ship.viewMatrix.clone().scale(.3))
+        uMVMatrix: view
         .clone()
+        .translate([1.5, 0, -8])
+        .rotateXYZ([phi, phi, phi])
+      }).draw();
+      for(const vec of [this.ship.front,this.ship.up,this.ship.right]){
+        cube
+        .setUniforms({
+          uPMatrix: projection,
+          uMVMatrix: view.clone().multiplyRight(new Matrix4().translate(vec.clone().scale(3)))
+                                  .multiplyRight(this.ship.viewMatrix.clone().scale(.3))
+          .clone()
+        }).draw();
+      }
+      pyramid
+      .setUniforms({
+        uPMatrix: projection,
+        uMVMatrix: view.clone().multiplyRight(new Matrix4().translate(this.engineLight)).scale(.3)
       }).draw();
     }
-    if(triggers.debugBasis)
-    pyramid
-    .setUniforms({
-      uPMatrix: projection,
-      uMVMatrix: view.clone().multiplyRight(new Matrix4().translate(this.engineLight)).scale(.3)
-    }).draw();
+    
 
     let success = true;
-    //console.log(this.ship.acc);
     if (this.scenes !== undefined)
     this.scenes[0].traverse((model, {worldMatrix}) => {
       // In glTF, meshes and primitives do no have their own matrix.
@@ -555,7 +531,7 @@ function addKeyboardHandler(canvas) {
       currentlyPressedKeys[e.code] = false;
       if(e.code === CONTROLS.TARGET_LIGHT) triggers.cameraLight = !triggers.cameraLight;
       if(e.code === CONTROLS.TARGET_VIEW) triggers.freeCamera = !triggers.freeCamera;
-      if(e.code === CONTROLS.DEBUG_BASIS) triggers.debugBasis = !triggers.debugBasis;
+      if(e.code === CONTROLS.DEBUG_BASIS) triggers.debugObjects = !triggers.debugObjects;
 
       if(e.code === CONTROLS.TARGET_VIEW && triggers.freeCamera) triggers.backToFreeCam = true;
 
@@ -658,20 +634,13 @@ function updateCamera(camera, ship, tick){
   if(!triggers.freeCamera){
     k *= .5;
     ship.updateCamera(new Vector3(), new Vector3(-kdpos[0],kdpos[1],roll).scale(RT_K*k), false);
-    
     ship.acc = Math.max(-1, Math.min(1, ship.acc+k*-kdpos[2]));
-
   }
   if(triggers.freeCamera)
     camera.updateCamera(dpos.negate().scale(k), new Vector3(0,0,roll*k*RT_K));
 }
 
 
-
-function wrap(el, wrapper) {
-  el.parentNode.insertBefore(wrapper, el);
-  wrapper.appendChild(el);
-}
 
 /* global window */
 if (!window.website) {
@@ -680,7 +649,6 @@ if (!window.website) {
   stats.showPanel( 0 ); // 0: fps, 1: ms, 2: mb, 3+: custom
 
   let fs = document.getElementById('fs-container');
- //wrap(document.getElementById('lumagl-canvas'), fs);
   stats.dom.setAttribute("id", "fps-meter");
   fs.appendChild( stats.dom );
   stats.dom.style.position="absolute";
