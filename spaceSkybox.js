@@ -342,7 +342,14 @@ export class SpaceSkybox extends SkyboxCube {
       delta = Math.min(this.criticalDelta, Math.sqrt(delta.dot(delta)));
       if(delta < this.criticalDelta){
         delta/=this.criticalDelta;
-        this.setUniforms({diff: delta});
+        delta = 0.5-Math.sin(Math.asin(1.0-2.0*delta)/3); //Invert smoothstep
+        //delta = 2*Math.sqrt(delta*.5)*Math.sqrt(1-delta*.5); 
+        
+        //let deltaS = delta*delta; let deltaSS = deltaS*deltaS;
+        //delta = 6*deltaSS*delta-15*deltaSS+10*deltaS*delta //Perlin smoothstep approx
+
+        this.delta = delta;
+        this.setUniforms({diff: delta}); //Invert smoothstep
         return;
       }
     }
@@ -351,6 +358,7 @@ export class SpaceSkybox extends SkyboxCube {
     if(this.oldPos === undefined) this.renderCubemap(gl, pos, this.rttCubemap);
     this.renderCubemap(gl, pos, this.rttNewCubemap);
     this.oldPos = pos.clone();
+    this.delta = 0;
     this.setUniforms({
       uTextureCube: this.rttCubemap, 
       uTextureCubeNew: this.rttNewCubemap, 

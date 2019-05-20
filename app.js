@@ -1,14 +1,14 @@
 import GL from '@luma.gl/constants';
 import {AnimationLoop, Model, Geometry, CubeGeometry, setParameters, log, 
   Texture2D, TextureCube, loadImage, Framebuffer, Renderbuffer, clear} from '@luma.gl/core';
-import {Matrix4, Vector3, Vector4, Quaternion} from 'math.gl';
+import {Matrix4, Vector3, Vector4, Quaternion, Vector2} from 'math.gl';
 import {parse} from '@loaders.gl/core';
 // eslint-disable-next-line import/no-unresolved
 import {DracoLoader} from '@loaders.gl/draco';
 import {addEvents, GLTFScenegraphLoader, createGLTFObjects, GLTFEnvironment} from '@luma.gl/addons';
 import { Program, FragmentShader, VertexShader } from '@luma.gl/webgl';
 import { VERTEX_SHADER, FRAGMENT_SHADER, SHADOWMAP_VERTEX, SHADOWMAP_FRAGMENT, 
-  PBR_VS_WITH_SHADOWMAP, PBR_FS_WITH_SHADOWMAP } from './shaders';
+  PBR_VS_WITH_SHADOWMAP, PBR_FS_WITH_SHADOWMAP, PBR_FS } from './shaders';
 import { SpaceSkybox, generateSimpleCubemap } from './spaceSkybox';
 import * as KeyCode from 'keycode-js';
 import * as Stats from 'stats.js';
@@ -42,7 +42,8 @@ const CONTROLS = {
 const SETTINGS = {
   SKYBOX_RES: 1024,
   SHADOWMAP_RES: 1024,
-  SHIP_DELTA: new Vector3([0,0,-15])
+  SHIP_DELTA: new Vector3([0,0,-15]),
+  MAX_SHIP_VEL: 0.5
 }
 
 Matrix4.prototype.removeTranslate = function(){
@@ -246,6 +247,8 @@ export default class AppAnimationLoop extends AnimationLoop {
   onInitialize({canvas, gl}) {
     this.camera = new Camera(new Vector3());
     this.ship = new Camera(new Vector3());
+    this.ship.vel = new Vector3();
+    this.ship.acc = 0.0;
     this.loadOptions = {
       pbrDebug: true,
       imageBasedLightingEnvironment: null,
@@ -305,6 +308,7 @@ export default class AppAnimationLoop extends AnimationLoop {
     this.loadOptions.imageBasedLightingEnvironment = this.environment;
     this.shadowProgram = new Program(gl, {vs: SHADOWMAP_VERTEX, fs:SHADOWMAP_FRAGMENT});
     this.pbrShadowProgram = new Program(gl, {vs: PBR_VS_WITH_SHADOWMAP, fs:PBR_FS_WITH_SHADOWMAP});
+    this.pbrProgram = new Program(gl, {vs: PBR_VS_WITH_SHADOWMAP, fs:PBR_FS});
     this.loadOptions.pbrShadowProgram = this.pbrShadowProgram;
     loadGLTF("/resources/45-e/scene.gltf", this.gl, this.loadOptions).then(result =>
       Object.assign(this, result)
@@ -336,7 +340,7 @@ export default class AppAnimationLoop extends AnimationLoop {
         [GL.DEPTH_ATTACHMENT]: this.shadowTxt2D
       }
     });
-    this.fbShadow.gl.drawBuffers([GL.DEPTH_ATTACHMENT]);
+    this.fbShadow.gl.drawBuffers([GL.BACK]);
     /*this.fbShadow.attach({
       [GL.DEPTH_ATTACHMENT]: this.shadowTxt2D
     }, {resizeAttachments: false});*/
@@ -365,6 +369,9 @@ export default class AppAnimationLoop extends AnimationLoop {
     this.lastTick = tick;
 
     updateCamera(this.camera, this.ship, deltaTick);
+    updateShip(this.ship, deltaTick);
+    let crDelta = (this.ship.vel.dot(this.ship.vel))*100;
+    skybox.criticalDelta = Math.max(10, crDelta);
 
     const projection = new Matrix4().perspective({aspect});
     let view_pos = this.camera.pos;
@@ -474,6 +481,7 @@ export default class AppAnimationLoop extends AnimationLoop {
     }).draw();
 
     let success = true;
+    //console.log(this.ship.acc);
     if (this.scenes !== undefined)
     this.scenes[0].traverse((model, {worldMatrix}) => {
       // In glTF, meshes and primitives do no have their own matrix.
@@ -482,7 +490,7 @@ export default class AppAnimationLoop extends AnimationLoop {
         color: [255*.2, 255*.5, 255*.8],
         position: this.engineLight,
         attenuation: [0, 0, 0.01],
-        intensity: 1.0
+        intensity: this.ship.acc
       });
       if(triggers.cameraLight) pointLights.push({
         color: [255, 0, 0],
@@ -502,7 +510,8 @@ export default class AppAnimationLoop extends AnimationLoop {
       const u_MVPMatrix = new Matrix4(projection).multiplyRight(view).multiplyRight(this.ship.viewMatrix).multiplyRight(worldMatrix);
       let old_program = model.model.program;
       if(model.id === "Cube.021_0-primitive-0") model.model.program = this.pbrShadowProgram;
-      this.pbrShadowProgram.setUniforms(old_program.uniforms);
+      else model.model.program = this.pbrProgram;
+      model.model.program.setUniforms(old_program.uniforms);
       model.setUniforms({
         u_Camera: view_pos,
         u_MVPMatrix, u_MSVSPMatirx,
@@ -510,6 +519,8 @@ export default class AppAnimationLoop extends AnimationLoop {
         u_ModelMatrix: this.ship.viewMatrix.clone().multiplyRight(worldMatrix),
         u_NormalMatrix: new Matrix4(this.ship.viewMatrix).multiplyRight(worldMatrix),
         u_SpecularEnvSampler: skybox.rttCubemap,
+        u_SpecularEnvSampler2: skybox.rttNewCubemap,
+        u_SkyInterpolation: skybox.delta,
         u_ScaleIBLAmbient: [1, 5]
       }).draw({
         drawMode: model.model.getDrawMode(),
@@ -521,7 +532,7 @@ export default class AppAnimationLoop extends AnimationLoop {
       model.model.program = old_program;
     });
 
-    skybox.update(gl, view_pos);
+    skybox.update(gl, view_pos.clone().negate());
     gl.viewport(0, 0, canvas.width, canvas.height);
     skybox.setUniforms({
       uProjection: projection,
@@ -588,10 +599,20 @@ function addPointerHandler(canvas, camera) {
   let pointerPos = function(x, y){
     const dx = x - currentX;
     const dy = y - currentY;
-    camera.updateCamera(new Vector3(), new Vector3(dy,dx).scale(0.001));
+    camera.updateCamera(new Vector3(), new Vector3(dx,dy).scale(0.001));
     currentX = x;
     currentY = y;
   }
+}
+
+function updateShip(ship, k){
+  ship.vel.add(ship.front.clone().scale(ship.acc*0.005));
+  let velC = Math.sqrt(ship.vel.dot(ship.vel)); //TODO: Can be improved with fast invsqrt
+  ship.vel.scale(Math.min(1.0, SETTINGS.MAX_SHIP_VEL/velC));
+  if(Math.abs(ship.acc)>0.0000001)
+    ship.acc -= 0.01*k*Math.sign(ship.acc);
+  else ship.acc = 0;
+  ship.updateCamera(ship.vel.clone().scale(k), new Vector3(), false);
 }
 
 function updateCamera(camera, ship, tick){
@@ -599,6 +620,7 @@ function updateCamera(camera, ship, tick){
   let kdpos = new Vector3(0);
   let roll = 0;
   let k = tick*.1;
+  const RT_K = .15;
   if (currentlyPressedKeys[CONTROLS.MOVE_LEFT]) {
     dpos.subtract(camera.right);
     kdpos.subtract([1,0,0]);
@@ -621,23 +643,27 @@ function updateCamera(camera, ship, tick){
     kdpos.subtract([0,1,0]);
   }
   if (currentlyPressedKeys[CONTROLS.ROLL_LEFT]) {
-    roll -= .25;
+    roll -= 1;
   }else if (currentlyPressedKeys[CONTROLS.ROLL_RIGHT]) {
-    roll += .25;
+    roll += 1;
   }
   if (currentlyPressedKeys[CONTROLS.RESET_CAMERA]){
     camera.applyQuaternion(new Quaternion().slerp({target: new Quaternion().rotationTo(camera.up, [0,1,0]), ratio: Math.min(1.0, k)}));
     camera.updateVectors();
+    ship.vel.scale(Math.min(0.95/k,0.95));
   }
 
   if (currentlyPressedKeys[CONTROLS.MOVE_FAST]) k *= 3;
 
   if(!triggers.freeCamera){
     k *= .5;
-    ship.updateCamera(ship.front.clone().scale(-kdpos[2]*k), new Vector3(-kdpos[0]*k*.25,kdpos[1]*k*.25,roll*k), false);
+    ship.updateCamera(new Vector3(), new Vector3(-kdpos[0],kdpos[1],roll).scale(RT_K*k), false);
+    
+    ship.acc = Math.max(-1, Math.min(1, ship.acc+k*-kdpos[2]));
+
   }
   if(triggers.freeCamera)
-    camera.updateCamera(dpos.negate().scale(k), new Vector3(0,0,roll*k));
+    camera.updateCamera(dpos.negate().scale(k), new Vector3(0,0,roll*k*RT_K));
 }
 
 
