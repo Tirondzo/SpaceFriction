@@ -440,7 +440,8 @@ in mat3 pbr_vTBN;
 in vec3 pbr_vNormal;
 #endif
 #endif
-uniform sampler2D u_ShadowMap;
+precision highp sampler2DShadow;
+uniform sampler2DShadow u_ShadowMap;
 in vec4 shadowCoord;
 
 struct PBRInfo
@@ -693,7 +694,7 @@ vec4 pbr_filterColor(vec4 colorUnused)
       float attenuation = getPointLightAttenuation(lighting_uPointLight[i], distance(lighting_uPointLight[i].position, pbr_vPosition));
       //out_shadow = shadowCoord.z;
       out_shadow = 1.0;
-      if(i == 0 && (texture(u_ShadowMap, shadowCoord.xy).r < shadowCoord.z - 0.005)) out_shadow = 0.0;
+      if(i == 0 && (texture(u_ShadowMap, vec3(shadowCoord.xy,shadowCoord.z - 0.005)) <= 0.0)) out_shadow = 0.0;
       color += calculateFinalColor(pbrInputs, lighting_uPointLight[i].color / attenuation)*out_shadow;
     }
   }
@@ -731,7 +732,7 @@ vec4 pbr_filterColor(vec4 colorUnused)
   void main(void) {
     fragmentColor = pbr_filterColor(vec4(0));
     //Visual debug: Shadow area
-    //if(texture(u_ShadowMap, shadowCoord.xy).z < shadowCoord.z - 0.005) fragmentColor=vec4(1,0,0,1);
+    //if(texture(u_ShadowMap, vec3(shadowCoord.xy,shadowCoord.z - 0.005)) > 0.0) fragmentColor=vec4(1,0,0,1);
   }
 `;
 
